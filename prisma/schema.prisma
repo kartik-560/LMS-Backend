@@ -1,0 +1,222 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                       String              @id @default(uuid())
+  email                    String              @unique @db.VarChar(100)
+  password                 String
+  role                     String              @default("student")
+  isEmailVerified          Boolean             @default(false)
+  emailVerificationToken   String?
+  emailVerificationExpires DateTime?
+  passwordResetToken       String?
+  passwordResetExpires     DateTime?
+  lastLogin                DateTime?
+  isActive                 Boolean             @default(true)
+  createdAt                DateTime            @default(now())
+  updatedAt                DateTime            @updatedAt
+  fullName                 String              @db.VarChar(100)
+
+  // NEW FIELDS
+  year                     String?             @db.VarChar(10)  
+  branch                   String?             @db.VarChar(100)
+  mobile                   String?             @db.VarChar(20)
+  mustChangePassword       Boolean             @default(false)
+
+  maxInstructorsAllowed Int?  
+  maxStudentsAllowed     Int? 
+
+  createdCourses           Course[]            @relation("CourseCreator")
+  managedCourses           Course[]            @relation("CourseManager")
+  instructorCourses        CourseInstructor[]
+  enrollments              Enrollment[]
+  assessmentAttempts       AssessmentAttempt[]
+  chapterProgress          ChapterProgress[]
+  courseReviews            CourseReview[]
+
+  permissions              Json                @default("{}")
+
+  @@index([mobile])
+  @@map("users")
+}
+
+
+model Course {
+  id          String             @id @default(uuid())
+  title       String
+  thumbnail   String?
+  status      String             @default("draft")
+  creatorId   String
+  managerId   String?
+    category    String?
+  description String?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  creator     User               @relation("CourseCreator", fields: [creatorId], references: [id])
+  manager     User?              @relation("CourseManager", fields: [managerId], references: [id])
+  instructors CourseInstructor[]
+  enrollments Enrollment[]
+  assessments Assessment[]
+  chapters    Chapter[]
+  reviews     CourseReview[]
+
+  @@index([creatorId])
+  @@index([managerId])
+  @@index([status])
+}
+
+model CourseInstructor {
+  id           String @id @default(uuid())
+  courseId     String
+  instructorId String
+  course     Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  instructor   User   @relation(fields: [instructorId], references: [id])
+
+  @@unique([courseId, instructorId])
+  @@index([instructorId])
+}
+
+model Enrollment {
+  id         String   @id @default(uuid())
+  studentId  String
+  courseId   String
+  status     String   @default("PENDING")
+  progress   Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  student    User     @relation(fields: [studentId], references: [id])
+  course     Course   @relation(fields: [courseId], references: [id])
+
+  @@unique([studentId, courseId]) 
+  @@index([courseId])
+  @@index([studentId])
+}
+
+model Chapter {
+  id          String            @id @default(uuid())
+  title       String            @db.VarChar(200)
+  slug        String   @db.VarChar(250) @default(cuid())
+  description String?
+  content     String?
+  attachments String[]
+  order       Int
+  isPreview   Boolean           @default(false)
+  isPublished Boolean           @default(true)
+  courseId    String
+  settings    Json              @default("{\"allowNotes\": true, \"allowComments\": true, \"allowDownloads\": true}")
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  assessments Assessment[]
+  progress    ChapterProgress[]
+  course      Course            @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@unique([courseId, slug])
+  @@index([courseId])
+  @@index([order])
+  @@map("chapters")
+}
+
+model ChapterProgress {
+  id          String    @id @default(uuid())
+  isCompleted Boolean   @default(false)
+  timeSpent   Int       @default(0)
+  completedAt DateTime?
+  chapterId   String
+  studentId   String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  chapter     Chapter   @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  student     User      @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([chapterId, studentId])
+  @@index([chapterId])
+  @@index([studentId])
+  @@map("chapter_progress")
+}
+
+model Assessment {
+  id               String               @id @default(uuid())
+  title            String
+  type             String               @default("quiz")
+  scope            String               @default("chapter")
+  timeLimitSeconds Int?
+  maxAttempts      Int                  @default(1)
+  isPublished      Boolean              @default(true)
+  order            Int?
+  courseId         String?
+  chapterId        String?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  questions        AssessmentQuestion[]
+  attempts         AssessmentAttempt[]
+  chapter          Chapter?             @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  course           Course?              @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@index([courseId])
+  @@index([chapterId])
+  @@index([type])
+  @@index([scope])
+  @@map("assessments")
+}
+
+model AssessmentQuestion {
+  id                   String     @id @default(uuid())
+  assessmentId         String
+  prompt               String
+  type                 String     @db.VarChar(30)   
+  options              String[]                    
+  correctOptionIndex   Int?                          
+  correctOptionIndexes Int[]      @default([])      
+  correctText          String?                      
+  pairs                Json?                        
+  sampleAnswer         String?                       
+  points               Int        @default(1)
+  order                Int        @default(1)
+  assessment           Assessment @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+
+  @@index([assessmentId])
+}
+
+model AssessmentAttempt {
+  id           String     @id @default(uuid())
+  assessmentId String
+  studentId    String
+  startedAt    DateTime   @default(now())
+  submittedAt  DateTime?
+  status       String     @default("in_progress")
+  score        Int?
+  maxScore     Int?
+  answers      Json?
+  assessment   Assessment @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  student      User       @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@index([assessmentId])
+  @@index([studentId])
+  @@map("assessment_attempts")
+}
+
+model CourseReview {
+  id        String   @id @default(uuid())
+  rating    Int
+  comment   String?
+  isPublic  Boolean  @default(true)
+  courseId  String
+  studentId String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  course    Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  student   User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([courseId, studentId])
+  @@index([courseId])
+  @@index([studentId])
+  @@index([rating])
+  @@map("course_reviews")
+}
