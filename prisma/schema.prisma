@@ -10,9 +10,11 @@ datasource db {
 model User {
   id                       String              @id @default(uuid())
   email                    String              @unique @db.VarChar(100)
-  password                 String
+  password                 String?             
+  authProvider             String              @default("credentials") 
   role                     String              @default("student")
-  isEmailVerified          Boolean             @default(false)
+  tokenVersion  Int     @default(0) 
+  isEmailVerified          Boolean             @default(true)
   emailVerificationToken   String?
   emailVerificationExpires DateTime?
   passwordResetToken       String?
@@ -23,18 +25,13 @@ model User {
   updatedAt                DateTime            @updatedAt
   fullName                 String              @db.VarChar(100)
 
-  // NEW FIELDS
   year                     String?             @db.VarChar(10)  
   branch                   String?             @db.VarChar(100)
   mobile                   String?             @db.VarChar(20)
   mustChangePassword       Boolean             @default(false)
 
-  maxInstructorsAllowed Int?  
-  maxStudentsAllowed     Int? 
-
   createdCourses           Course[]            @relation("CourseCreator")
-  managedCourses           Course[]            @relation("CourseManager")
-  instructorCourses        CourseInstructor[]
+
   enrollments              Enrollment[]
   assessmentAttempts       AssessmentAttempt[]
   chapterProgress          ChapterProgress[]
@@ -46,6 +43,82 @@ model User {
   @@map("users")
 }
 
+model Registration {
+  id           String   @id @default(uuid())
+  fullName     String   @db.VarChar(150)
+  email        String   @unique @db.VarChar(150)
+
+  
+  year         String?  @db.VarChar(20)
+  branch       String?  @db.VarChar(100)
+  academicYear String?  @db.VarChar(20)
+  rollNumber   String?  @db.VarChar(50)
+
+  collegeId    String
+  departmentId String?  
+
+  role         String   @default("STUDENT")
+  status       String   @default("PENDING")
+
+  otpHash      String?
+  otpExpires   DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  college      College     @relation(fields: [collegeId], references: [id], onDelete: Cascade)
+  department   Department? @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+
+  @@unique([collegeId, rollNumber])
+  @@index([collegeId])
+  @@index([departmentId])
+  @@index([role])
+  @@map("registrations")
+}
+
+
+model College {
+  id             String   @id @default(uuid())
+  contactPerson  String   @db.VarChar(150)  
+  name           String   @db.VarChar(200) 
+  mobileNumber   String   @db.VarChar(20)
+  studentLimit   Int  @default(1)    
+  validity       DateTime 
+  email          String   @db.VarChar(150)
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  departments    Department[]
+  
+  adminLimit Int @default(1)
+  instructorLimit Int @default(1) 
+  
+
+  @@index([name])
+  @@map("colleges")
+  Registration Registration[]
+  CoursesAssigned CoursesAssigned[]
+  AssessmentAttempt AssessmentAttempt[]
+}
+
+model Department {
+  id        String   @id @default(uuid())
+  name      String   @db.VarChar(150)
+  collegeId String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  college   College  @relation(fields: [collegeId], references: [id], onDelete: Cascade)
+
+  @@index([name])
+  @@index([collegeId])
+  @@map("departments")
+  Registration Registration[]
+  CoursesAssigned CoursesAssigned[]
+  Enrollment Enrollment[]
+  AssessmentAttempt AssessmentAttempt[]
+}
 
 model Course {
   id          String             @id @default(uuid())
@@ -53,33 +126,44 @@ model Course {
   thumbnail   String?
   status      String             @default("draft")
   creatorId   String
-  managerId   String?
+
     category    String?
   description String?
   createdAt   DateTime           @default(now())
   updatedAt   DateTime           @updatedAt
   creator     User               @relation("CourseCreator", fields: [creatorId], references: [id])
-  manager     User?              @relation("CourseManager", fields: [managerId], references: [id])
-  instructors CourseInstructor[]
+ 
+  madeBySuperAdmin Boolean          @default(true)
   enrollments Enrollment[]
   assessments Assessment[]
   chapters    Chapter[]
   reviews     CourseReview[]
 
   @@index([creatorId])
-  @@index([managerId])
+ 
   @@index([status])
+  CoursesAssigned CoursesAssigned[]
+  AssessmentAttempt AssessmentAttempt[]
 }
 
-model CourseInstructor {
-  id           String @id @default(uuid())
-  courseId     String
-  instructorId String
-  course     Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  instructor   User   @relation(fields: [instructorId], references: [id])
+model CoursesAssigned {
+  id             String   @id @default(uuid())
+  courseId       String
+  collegeId      String
+  departmentId   String?          // optional tag to a Department
+  capacity       Int?
 
-  @@unique([courseId, instructorId])
-  @@index([instructorId])
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  course       Course     @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  college      College    @relation(fields: [collegeId], references: [id], onDelete: Cascade)
+  department   Department? @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+
+  @@unique([courseId, collegeId])   // keep uniqueness at college level
+  @@index([collegeId])
+  @@index([departmentId])
+  @@map("courses_assigned")
 }
 
 model Enrollment {
@@ -88,15 +172,19 @@ model Enrollment {
   courseId   String
   status     String   @default("PENDING")
   progress   Int      @default(0)
+  startedAt  DateTime?
+  completedAt DateTime?
+  duration     Int?      // in minutes
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
-
+  departmentId String?  
   student    User     @relation(fields: [studentId], references: [id])
   course     Course   @relation(fields: [courseId], references: [id])
-
+  department Department? @relation(fields: [departmentId], references: [id], onDelete: Cascade) 
   @@unique([studentId, courseId]) 
   @@index([courseId])
   @@index([studentId])
+  @@index([departmentId])
 }
 
 model Chapter {
@@ -192,16 +280,36 @@ model AssessmentAttempt {
   submittedAt  DateTime?
   status       String     @default("in_progress")
   score        Int?
-  maxScore     Int?
   answers      Json?
+
+  departmentId String?
+  courseId     String?
+  collegeId    String?
+
+  // Relations
   assessment   Assessment @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
   student      User       @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  department   Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  course       Course?     @relation(fields: [courseId], references: [id], onDelete: SetNull)
+  college      College?    @relation(fields: [collegeId], references: [id], onDelete: SetNull)
 
   @@index([assessmentId])
   @@index([studentId])
+  @@index([departmentId])
+  @@index([courseId])
+  @@index([collegeId])
   @@map("assessment_attempts")
 }
 
+model Setting {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  value     Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("settings")
+}
 model CourseReview {
   id        String   @id @default(uuid())
   rating    Int

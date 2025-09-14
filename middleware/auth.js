@@ -1,28 +1,25 @@
 // middleware/auth.js
 import jwt from "jsonwebtoken";
 import { prisma } from "../config/prisma.js";
-import email from "../utils/sendEmail.js";
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret";
 
-/** Normalize to UPPER_SNAKE_CASE so comparisons are consistent */
 export const norm = (s) =>
   String(s || "")
     .trim()
     .toUpperCase()
     .replace(/[^A-Z0-9]+/g, "_");
 
-/** Try to extract a bearer token from header, cookie, or query param */
+
 const getToken = (req) => {
-  // 1) Authorization: Bearer <token>
+ 
   const auth = req.headers.authorization || "";
   if (auth.startsWith("Bearer ")) return auth.slice(7);
 
-  // 2) Cookie (common names)
+
   if (req.cookies?.token) return req.cookies.token;
   if (req.cookies?.access_token) return req.cookies.access_token;
   if (req.cookies?.jwt) return req.cookies.jwt;
 
-  // 3) Query param (useful for webhooks/tools)
   if (req.query?.token) return String(req.query.token);
 
   return null;
@@ -40,16 +37,13 @@ export async function protect(req, res, next) {
       return res.status(401).json({ error: "Unauthorized" });
     }
 
-    // Be flexible with common JWT claim keys
     const userId =
       decoded.id || decoded.userId || decoded.uid || decoded.sub || null;
     const userEmail = decoded.email || decoded.user?.email || null;
     if (!userId && !userEmail)
       return res.status(401).json({ error: "Unauthorized" });
 
-    const where = userId
-      ? { id: String(userId) }
-      : { email: String(userEmail) };
+    const where = userId ? { id: String(userId) } : { email: String(userEmail) };
 
     const user = await prisma.user.findUnique({
       where,
@@ -61,31 +55,35 @@ export async function protect(req, res, next) {
         isActive: true,
         isEmailVerified: true,
         permissions: true,
-        // expose new fields you added
         year: true,
         branch: true,
         mobile: true,
         mustChangePassword: true,
+        tokenVersion: true,                  // 👈 include this
       },
     });
 
     if (!user || !user.isActive)
       return res.status(401).json({ error: "Unauthorized" });
 
-    // Normalize role once; keep raw too if you need it
+    // 👇 NEW: block tokens from older sessions
+    if (
+      typeof decoded.tokenVersion !== "number" ||
+      decoded.tokenVersion !== user.tokenVersion
+    ) {
+      return res
+        .status(401)
+        .json({ error: "SESSION_REVOKED" }); // frontend: clear auth + redirect
+    }
+
     const rawRole = user.role || "";
     const role = norm(rawRole);
 
-    // Standardize common admin variants, e.g. SUPERADMIN vs SUPER_ADMIN
-    const isAdmin =
-      role === "ADMIN" || role === "SUPER_ADMIN" || role === "SUPERADMIN";
-
-    // Attach to req for downstream handlers
     req.user = {
       ...user,
-      role, // normalized
-      rawRole, // original from DB
-      isAdmin,
+      role,        // normalized
+      rawRole,     // original
+      isAdmin: role === "ADMIN" || role === "SUPER_ADMIN" || role === "SUPERADMIN",
       permissions: user.permissions || {},
     };
 
@@ -96,10 +94,7 @@ export async function protect(req, res, next) {
   }
 }
 
-/**
- * Role-based guard
- * Usage: router.get("/admin-only", protect, authorize("ADMIN","SUPER_ADMIN"), handler)
- */
+
 export const authorize = (...roles) => {
   // Normalize input roles once (support both ADMIN and SUPERADMIN variants)
   const allowed = roles.map((r) => norm(r));
@@ -128,7 +123,7 @@ export const authorize = (...roles) => {
   };
 };
 
-/** Admin-only helper */
+
 export const requireAdminOnly = (req, res, next) => {
   if (!req.user) return res.status(401).json({ message: "Not authenticated" });
   // role is already normalized by protect()
@@ -136,8 +131,6 @@ export const requireAdminOnly = (req, res, next) => {
   if (r === "ADMIN" || r === "SUPER_ADMIN" || r === "SUPERADMIN") return next();
   return res.status(403).json({ message: "Admins only" });
 };
-
-// controllers/auth.js
 
 export const register = async (req, res) => {
   try {

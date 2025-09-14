@@ -18,7 +18,11 @@
     "db:reset": "prisma migrate reset",
     "db:seed": "prisma db seed",
     "db:deploy": "prisma migrate deploy",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "seed:catalog": "node -r dotenv/config prisma/seed.js"
+  },
+    "prisma": {
+    "seed": "node -r dotenv/config prisma/seed.js"
   },
   "keywords": [
     "lms",

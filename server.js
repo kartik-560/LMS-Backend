@@ -12,7 +12,7 @@ import debugEmail from "./routes/debug-email.js";
 import { protect } from "./middleware/auth.js";
 import uploadsRouter from "./routes/upload.js";
 import authRouter from "./routes/auth.js";
-import usersRouter from "./routes/users.js";
+
 import superAdminRouter from "./routes/superadmin.js";
 import adminRouter from "./routes/admin.js";
 import coursesRouter from "./routes/courses.js";
@@ -20,7 +20,7 @@ import chapterRouter from "./routes/chapter.js";
 import enrollmentsRouter from "./routes/enrollments.js";
 import assessmentsRouter from "./routes/assessments.js";
 import progressRoutes from "./routes/progress.js";
-
+import collegesRouter from "./routes/college.js";
 
 if (!process.env.DATABASE_URL) {
   console.error(
@@ -103,7 +103,9 @@ app.get("/health", (_req, res) => {
 
 // Routes
 app.use("/api/auth", authRouter);
-app.use("/api/users", usersRouter);
+// app.use("/api/users", usersRouter);
+
+app.use("/api/colleges", collegesRouter);
 
 app.use("/api/superadmin", protect, superAdminRouter);
 app.use("/api/admin", protect, adminRouter);

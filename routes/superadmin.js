@@ -30,59 +30,6 @@ function requireSuperAdmin(req, res, next) {
   next();
 }
 
-// router.get("/overview", requireSuperAdmin, async (_req, res) => {
-//   const [users, totalCourses] = await Promise.all([
-//     prisma.user.findMany({ select: { role: true, isActive: true } }),
-//     prisma.course.count(),
-//   ]);
-
-//   const totalAdmins = users.filter((u) => ["ADMIN", "SUPER_ADMIN"].includes(up(u.role))).length;
-//   const totalInstructors = users.filter((u) => up(u.role) === "INSTRUCTOR").length;
-//   const totalStudents = users.filter((u) => up(u.role) === "STUDENT").length;
-//   const activeUsers = users.filter((u) => u.isActive).length;
-
-//   const courseRows = await prisma.course.findMany({
-//     select: {
-//       id: true,
-//       title: true,
-//       status: true,
-//       instructors: { select: { id: true } },
-//       enrollments: { select: { id: true } },
-//     },
-//   });
-
-//   const courseBreakdown = {};
-//   for (const c of courseRows) {
-//     courseBreakdown[c.id] = {
-//       title: c.title,
-//       status: c.status,
-//       instructors: c.instructors.length,
-//       students: c.enrollments.length,
-//     };
-//   }
-
-//   const performanceMetrics = {
-//     apiUsage: 47,
-//     dbUsage: 61,
-//     errorRate: 1.1,
-//     avgResponseTimeMs: 118,
-//     backgroundJobs: 33,
-//   };
-
-//   const overview = {
-//     totalAdmins,
-//     totalInstructors,
-//     totalStudents,
-//     totalCourses,
-//     systemUptime: "99.9%",
-//     activeUsers,
-//     avgCourseCompletion: 64,
-//     totalRevenue: 0,
-//   };
-
-//   res.json({ overview, courseBreakdown, performanceMetrics });
-// });
-
 router.get("/overview", requireSuperAdmin, async (_req, res) => {
   const [users, totalCourses] = await Promise.all([
     prisma.user.findMany({ select: { role: true, isActive: true } }),
@@ -138,7 +85,6 @@ router.get("/overview", requireSuperAdmin, async (_req, res) => {
   res.json({ overview, courseBreakdown, performanceMetrics });
 });
 
-
 router.get("/admins", requireSuperAdmin, async (_req, res) => {
   const rows = await prisma.user.findMany({
     where: {
@@ -157,8 +103,6 @@ router.get("/admins", requireSuperAdmin, async (_req, res) => {
 });
 
 
-
-
 router.get("/instructors", requireSuperAdmin, async (_req, res) => {
   const rows = await prisma.user.findMany({
     where: { OR: [{ role: "INSTRUCTOR" }, { role: "instructor" }] },
@@ -172,7 +116,6 @@ router.get("/instructors", requireSuperAdmin, async (_req, res) => {
 
   res.json(data);
 });
-
 
 router.get("/students", requireSuperAdmin, async (_req, res) => {
   const rows = await prisma.user.findMany({
@@ -188,12 +131,9 @@ router.get("/students", requireSuperAdmin, async (_req, res) => {
   res.json(data);
 });
 
-
 router.patch("/users/:id/permissions", requireSuperAdmin, async (_req, res) => {
   return res.status(501).json({ error: "Permissions not supported on User model" });
 });
-
-
 
 router.post("/users/bulk-update", requireSuperAdmin, async (req, res) => {
   const { ids, data } = req.body || {};
@@ -201,7 +141,6 @@ router.post("/users/bulk-update", requireSuperAdmin, async (req, res) => {
   const result = await prisma.user.updateMany({ where: { id: { in: ids } }, data });
   res.json({ count: result.count });
 });
-
 
 router.delete("/users/:id", requireSuperAdmin, async (req, res) => {
   const { id } = req.params;
@@ -223,7 +162,6 @@ router.delete("/users/:id", requireSuperAdmin, async (req, res) => {
   await prisma.user.delete({ where: { id } });
   res.json({ ok: true });
 });
-
 
 router.get("/courses", requireSuperAdmin, async (_req, res) => {
   const rows = await prisma.course.findMany({
@@ -250,8 +188,6 @@ router.get("/courses", requireSuperAdmin, async (_req, res) => {
   );
 });
 
-
-
 router.post("/courses", requireSuperAdmin, async (req, res) => {
   const { title, thumbnail, creatorId, managerId, status } = req.body || {};
   if (!title || !creatorId) return res.status(400).json({ error: "title and creatorId are required" });
@@ -266,7 +202,6 @@ router.post("/courses", requireSuperAdmin, async (req, res) => {
   res.json(toCoursePayload(created));
 });
 
-
 router.patch("/courses/:id", requireSuperAdmin, async (req, res) => {
   const { id } = req.params;
   const { title, thumbnail, status, managerId } = req.body || {};
@@ -276,7 +211,6 @@ router.patch("/courses/:id", requireSuperAdmin, async (req, res) => {
   });
   res.json(toCoursePayload(updated));
 });
-
 
 router.delete("/courses/:id", requireSuperAdmin, async (req, res) => {
   const { id } = req.params;
