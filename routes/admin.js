@@ -15,18 +15,27 @@ function requireAdmin(req, res, next) {
   }
   next();
 }
-
+const isCollegeAdmin = (user) => {
+  return user.role === "ADMIN" && user.collegeId; // Ensure user is an admin and belongs to a college
+};
 // Helper function to check if Admin belongs to the college
 async function assertAdminBelongsToCollege(user, collegeId) {
-  if (!isAdmin(user)) return false;
-  return String(user.collegeId) === String(collegeId);
+  if (!user.permissions || !user.permissions.collegeId) {
+    return false; // Handle cases where collegeId is not found in permissions
+  }
+  
+  // Compare the collegeId in the user permissions with the one sent in the request
+  return String(user.permissions.collegeId) === String(collegeId);
 }
-
 
 
 router.post("/courses", requireAdmin, async (req, res) => {
   try {
     const { title, thumbnail, status = "draft", category, description, collegeId } = req.body || {};
+    
+    // Log to debug if the admin's permissions are being passed correctly
+    console.log('User Permissions:', req.user.permissions);
+    console.log('Requested College ID:', collegeId);
 
     if (!title || !collegeId) {
       return res.status(400).json({ error: "Title and collegeId are required" });
@@ -47,15 +56,6 @@ router.post("/courses", requireAdmin, async (req, res) => {
         creatorId: req.user.id, // Admin creating the course
         category,
         description,
-      },
-    });
-
-    // Optionally, you can assign this course to the Admin's college here if needed
-    await prisma.coursesAssigned.create({
-      data: {
-        courseId: createdCourse.id,
-        collegeId,
-        departmentId: null, // Set departmentId if needed
       },
     });
 

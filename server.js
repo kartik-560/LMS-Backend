@@ -31,9 +31,9 @@ if (!process.env.DATABASE_URL) {
 const app = express();
 
 const ALLOWED_ORIGINS = [
-  "http://localhost:5173", // dev Vite
-  "http://localhost:3000", // dev Next
-  "https://lms-vhfz.vercel.app", // your prod frontend
+  "http://localhost:5173", 
+  "http://localhost:3000", 
+  "https://lms-vhfz.vercel.app", 
 ];
 
 app.use(

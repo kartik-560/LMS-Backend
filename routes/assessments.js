@@ -7,7 +7,7 @@ const up = (s) => String(s || '').toUpperCase();
 const isAdmin = (req) => ['ADMIN', 'SUPERADMIN', 'SUPER_ADMIN'].includes(up(req.user?.role));
 
 
-router.post('/chapters/:chapterId', authorize('ADMIN', 'SUPERADMIN', 'INSTRUCTOR', 'SUPER_ADMIN'), async (req, res) => {
+router.post('/chapters/:chapterId', authorize('ADMIN', 'SUPERADMIN', 'SUPER_ADMIN'), async (req, res) => {
   try {
     const { chapterId } = req.params;
     const {
@@ -18,7 +18,7 @@ router.post('/chapters/:chapterId', authorize('ADMIN', 'SUPERADMIN', 'INSTRUCTOR
       maxAttempts = 1,
       isPublished = true,
       order = 1,
-      questions = [],
+      questions = [],  // List of questions for the assessment
     } = req.body;
 
     // Ensure chapter exists
@@ -55,7 +55,7 @@ router.post('/chapters/:chapterId', authorize('ADMIN', 'SUPERADMIN', 'INSTRUCTOR
         correctText: q.correctText ?? null,
         pairs: q.pairs ?? null,
         sampleAnswer: q.sampleAnswer ?? null,
-        points: Number.isFinite(q.points) ? q.points : 1,
+        points: Number.isFinite(q.points) ? q.points : 1, // Default to 1 point if no points are specified
         order: Number.isFinite(q.order) ? q.order : i + 1,
       }));
 
@@ -134,7 +134,6 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-
 router.post('/:id/attempts', async (req, res) => {
   try {
     const assessmentId = String(req.params.id);
@@ -153,19 +152,19 @@ router.post('/:id/attempts', async (req, res) => {
 
     const answers = req.body?.answers || {};
     let score = 0;
-    let maxScore = 0;
 
+    // Calculate score based on each question's points
     for (const q of assessment.questions) {
-      const pts = typeof q.points === 'number' ? q.points : 1;
-      maxScore += pts;
-
+      const pts = typeof q.points === 'number' ? q.points : 1; // Default to 1 point if no points defined
       const ans = answers[q.id];
 
+      // Single or multiple choice answers
       if (typeof q.correctOptionIndex === 'number') {
         if (Number(ans) === q.correctOptionIndex) score += pts;
         continue;
       }
 
+      // Multiple correct answers (checkboxes, etc.)
       if (Array.isArray(q.correctOptionIndexes)) {
         const normalized = Array.isArray(ans) ? ans.map(Number).sort() : [];
         const correct = [...q.correctOptionIndexes].sort();
@@ -177,6 +176,8 @@ router.post('/:id/attempts', async (req, res) => {
         }
         continue;
       }
+
+      // You can add more logic for other types like "match", "numerical", etc.
     }
 
     const attempt = await prisma.assessmentAttempt.create({
@@ -186,12 +187,11 @@ router.post('/:id/attempts', async (req, res) => {
         status: 'submitted',
         submittedAt: new Date(),
         score,
-        maxScore,
         answers,
       },
     });
 
-    res.json({ attemptId: attempt.id, score, maxScore });
+    res.json({ attemptId: attempt.id, score });
   } catch (e) {
     console.error('POST /assessments/:id/attempts error:', e);
     res.status(500).json({ error: 'Internal error' });
@@ -203,7 +203,6 @@ router.get('/dashboard', protect, async (req, res) => {
   try {
     const studentId = req.user.id;
 
-   
     const totalCourses = await prisma.enrollment.count({
       where: { studentId },
     });
@@ -212,7 +211,6 @@ router.get('/dashboard', protect, async (req, res) => {
       where: { studentId },
     });
 
- 
     const attempts = await prisma.assessmentAttempt.findMany({
       where: { studentId, status: 'submitted' },
       orderBy: { submittedAt: 'desc' },
@@ -230,13 +228,11 @@ router.get('/dashboard', protect, async (req, res) => {
     }
     const averageTestScore = count ? Math.round(percentSum / count) : 0;
 
-
     const totalTimeSpent = await prisma.chapterProgress.aggregate({
       where: { studentId },
       _sum: { timeSpentSeconds: true }, 
     });
 
-  
     const certificatesEarned = await prisma.certificate.count({
       where: { studentId },
     });
@@ -255,5 +251,6 @@ router.get('/dashboard', protect, async (req, res) => {
     res.status(500).json({ error: 'Internal error' });
   }
 });
+
 
 export default router;
