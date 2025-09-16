@@ -1,76 +1,87 @@
 import express from "express";
 import { prisma } from "../config/prisma.js";
+import { protect, authorize } from "../middleware/auth.js"; 
 
 const router = express.Router();
-
 const up = (s) => String(s || "").toUpperCase();
+const isAdmin = (req) => ['ADMIN', 'SUPERADMIN', 'SUPER_ADMIN'].includes(up(req.user?.role));
 
-
+// Ensure Admin is authorized to view or edit course data
 function requireAdmin(req, res, next) {
-  if (!req.user) return res.status(401).json({ error: "Unauthorized" });
+  if (!req.user) return res.status(401).json({ error: 'Unauthorized' });
   const r = up(req.user.role);
-  if (r !== "ADMIN" && r !== "SUPER_ADMIN") {
-    return res.status(403).json({ error: "Forbidden" });
+  if (r !== 'ADMIN' && r !== 'SUPER_ADMIN') {
+    return res.status(403).json({ error: 'Forbidden' });
   }
   next();
 }
 
-async function getAdminCourseIds(adminId) {
-  const cs = await prisma.course.findMany({
-    where: { OR: [{ creatorId: adminId }, { managerId: adminId }] },
-    select: { id: true },
-  });
-  return cs.map((c) => c.id);
+// Helper function to check if Admin belongs to the college
+async function assertAdminBelongsToCollege(user, collegeId) {
+  if (!isAdmin(user)) return false;
+  return String(user.collegeId) === String(collegeId);
 }
 
-router.get("/overview", requireAdmin, async (req, res, next) => {
-  try {
-    const adminId = req.user.id;
-    const courseIds = await getAdminCourseIds(adminId);
 
-    if (courseIds.length === 0) {
-      return res.json({
-        totals: { courses: 0, students: 0, instructors: 0 },
-        courseIds: [],
-      });
+async function assertAdminBelongsToCollege(user, collegeId) {
+  if (!isAdmin(user)) return false;
+  return String(user.collegeId) === String(collegeId);
+}
+
+router.post("/courses", requireAdmin, async (req, res) => {
+  try {
+    const { title, thumbnail, status = "draft", category, description, collegeId } = req.body || {};
+
+    if (!title || !collegeId) {
+      return res.status(400).json({ error: "Title and collegeId are required" });
     }
 
-    const [enrollments, courseInstructors] = await Promise.all([
-      prisma.enrollment.findMany({
-        where: { courseId: { in: courseIds } },
-        select: { studentId: true },
-      }),
-      prisma.courseInstructor.findMany({
-        where: { courseId: { in: courseIds } },
-        select: { instructorId: true },
-      }),
-    ]);
+    // Check if the Admin belongs to the college
+    const allowed = await assertAdminBelongsToCollege(req.user, collegeId);
+    if (!allowed) {
+      return res.status(403).json({ error: "Forbidden: You do not manage this college" });
+    }
 
-    const uniqueStudents = new Set(enrollments.map((e) => e.studentId));
-    const uniqueInstructors = new Set(
-      courseInstructors.map((ci) => ci.instructorId)
-    );
-
-    res.json({
-      totals: {
-        courses: courseIds.length,
-        students: uniqueStudents.size,
-        instructors: uniqueInstructors.size,
+    // Create the course
+    const createdCourse = await prisma.course.create({
+      data: {
+        title,
+        thumbnail,
+        status,
+        creatorId: req.user.id, // Admin creating the course
+        category,
+        description,
       },
-      courseIds,
     });
+
+    // Optionally, you can assign this course to the Admin's college here if needed
+    await prisma.coursesAssigned.create({
+      data: {
+        courseId: createdCourse.id,
+        collegeId,
+        departmentId: null, // Set departmentId if needed
+      },
+    });
+
+    res.status(201).json(createdCourse);
   } catch (err) {
-    next(err);
+    console.error("POST /courses error:", err);
+    res.status(500).json({ error: "Internal error creating course" });
   }
 });
 
-
-router.get("/courses", requireAdmin, async (req, res, next) => {
+router.get("/courses", requireAdmin, async (req, res) => {
   try {
     const adminId = req.user.id;
 
     const rows = await prisma.course.findMany({
-      where: { OR: [{ creatorId: adminId }, { managerId: adminId }] },
+      where: {
+        CoursesAssigned: {
+          some: {
+            collegeId: req.user.collegeId,  // Ensuring the course is assigned to the admin's college
+          }
+        }
+      },
       select: {
         id: true,
         title: true,
@@ -84,7 +95,7 @@ router.get("/courses", requireAdmin, async (req, res, next) => {
           },
         },
       },
-      orderBy: { id: "desc" },
+      orderBy: { id: 'desc' },
     });
 
     const mapped = rows.map((c) => ({
@@ -93,153 +104,97 @@ router.get("/courses", requireAdmin, async (req, res, next) => {
       description: c.description || "",
       thumbnail: c.thumbnail || null,
       status: c.status || "draft",
-      level: null,
-      totalModules: 0, 
-      totalChapters: 0,
       studentCount: c.enrollments.length,
       instructorNames: c.instructors.map((i) => i.instructor.fullName),
-      instructorIds: c.instructors.map((i) => i.instructor.id),
     }));
 
     res.json(mapped);
   } catch (err) {
-    next(err);
+    console.error("GET /courses error:", err);
+    res.status(500).json({ error: "Internal error" });
   }
 });
 
-
-
-router.get("/students", requireAdmin, async (req, res, next) => {
+router.post("/courses/:id/assign", requireAdmin, async (req, res) => {
   try {
-    const adminId = req.user.id;
-    const courseIds = await getAdminCourseIds(adminId);
+    const { id: courseId } = req.params;
+    const { collegeId, departmentId = null, capacity = null } = req.body || {};
 
-    if (courseIds.length === 0) {
-      return res.json([]);
-    }
+    if (!collegeId) return res.status(400).json({ error: "collegeId is required" });
 
-    const enrollments = await prisma.enrollment.findMany({
-      where: { courseId: { in: courseIds } },
-      select: {
-        courseId: true,
-        student: {
-          select: { id: true, fullName: true, email: true, isActive: true, lastLogin: true },
-        },
-      },
+    // Check if the Admin belongs to the college
+    const allowed = await assertAdminBelongsToCollege(req.user, collegeId);
+    if (!allowed) return res.status(403).json({ error: "Forbidden: You are not an admin of this college" });
+
+    // Assign the course
+    const row = await prisma.coursesAssigned.upsert({
+      where: { courseId_collegeId_departmentId: { courseId, collegeId, departmentId } },
+      create: { courseId, collegeId, departmentId, capacity },
+      update: { capacity },
     });
 
-
-    const studentsById = new Map();
-    for (const enrollment of enrollments) {
-        const student = enrollment.student;
-        if (!studentsById.has(student.id)) {
-            studentsById.set(student.id, {
-                ...student,
-                assignedCourses: new Set(),
-            });
-        }
-        studentsById.get(student.id).assignedCourses.add(enrollment.courseId);
-    }
-
-    const result = Array.from(studentsById.values()).map(s => ({
-      ...s,
-      assignedCourses: Array.from(s.assignedCourses),
-    }));
-
-    res.json(result);
-  } catch (err) {
-    next(err);
+    return res.json({ ok: true, assignment: row });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: "Internal Server Error" });
   }
 });
 
-
-router.get("/instructors", requireAdmin, async (req, res, next) => {
+router.delete("/courses/:id/unassign", requireAdmin, async (req, res) => {
   try {
-    const adminId = req.user.id;
-    const courseIds = await getAdminCourseIds(adminId);
+    const { id: courseId } = req.params;
+    const { collegeId, departmentId = null } = req.body || {};
 
-   
-    if (courseIds.length === 0) {
-        return res.json([]);
+    if (!collegeId) return res.status(400).json({ error: "collegeId is required" });
+
+    // Check if the Admin belongs to the college
+    const allowed = await assertAdminBelongsToCollege(req.user, collegeId);
+    if (!allowed) return res.status(403).json({ error: "Forbidden: You are not an admin of this college" });
+
+    // Admins can only remove dept-level rows
+    if (!departmentId) {
+      return res.status(403).json({ error: "Forbidden: You cannot remove college-level assignment" });
     }
 
-    const links = await prisma.courseInstructor.findMany({
-      where: { courseId: { in: courseIds } },
-      select: {
-        courseId: true,
-        instructor: {
-          select: { id: true, fullName: true, email: true, isActive: true, lastLogin: true },
-        },
-      },
+    await prisma.coursesAssigned.delete({
+      where: { courseId_collegeId_departmentId: { courseId, collegeId, departmentId } },
     });
 
-
-    const instructorsById = new Map();
-    for (const link of links) {
-        const instructor = link.instructor;
-        if (!instructorsById.has(instructor.id)) {
-            instructorsById.set(instructor.id, {
-                ...instructor,
-                assignedCourses: new Set(),
-            });
-        }
-        instructorsById.get(instructor.id).assignedCourses.add(link.courseId);
+    return res.json({ ok: true });
+  } catch (e) {
+    // Handle cases where the assignment doesn't exist
+    if (e.code === "P2025") {
+      return res.status(404).json({ error: "Assignment not found" });
     }
-
-    const result = Array.from(instructorsById.values()).map(i => ({
-        ...i,
-        assignedCourses: Array.from(i.assignedCourses),
-    }));
-
-    res.json(result);
-  } catch (err) {
-    next(err);
+    console.error(e);
+    return res.status(500).json({ error: "Internal Server Error" });
   }
 });
 
+router.get("/courses/assignments", requireAdmin, async (req, res) => {
+  try {
+    const { collegeId } = req.query;
 
-router.patch(
-  "/instructors/:id/permissions",
-  requireAdmin,
-  async (req, res, next) => {
-    try {
-      const adminId = req.user.id;
-      const instructorId = req.params.id;
+    if (!collegeId) return res.status(400).json({ error: "collegeId is required" });
 
-      const user = await prisma.user.findUnique({
-        where: { id: instructorId },
-        select: { id: true, role: true },
-      });
+    const rows = await prisma.coursesAssigned.findMany({
+      where: { collegeId },
+      orderBy: [{ departmentId: "asc" }, { courseId: "asc" }],
+    });
 
-      if (!user || up(user.role) !== "INSTRUCTOR") {
-        return res.status(404).json({ error: "Instructor not found" });
-      }
+    const grouped = rows.reduce((acc, r) => {
+      const key = r.collegeId;
+      acc[key] = acc[key] || { collegeLevel: null, departments: [] };
+      if (r.departmentId === null) acc[key].collegeLevel = r;
+      else acc[key].departments.push(r);
+      return acc;
+    }, {});
 
-    
-      const adminCourseIds = await getAdminCourseIds(adminId);
-      const linkCount = await prisma.courseInstructor.count({
-          where: {
-              instructorId: instructorId,
-              courseId: { in: adminCourseIds },
-          },
-      });
-
-      if (linkCount === 0) {
-          return res.status(403).json({ error: "Forbidden: You do not manage this instructor." });
-      }
- 
-
-      const updated = await prisma.user.update({
-        where: { id: instructorId },
-        data: { permissions: req.body || {} },
-        select: { id: true, permissions: true },
-      });
-
-      res.json(updated);
-    } catch (err) {
-      next(err);
-    }
+    res.json({ ok: true, assignments: grouped });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Internal Server Error" });
   }
-);
+});
 
 export default router;

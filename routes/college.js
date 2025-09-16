@@ -1,4 +1,3 @@
-// routes/colleges.js
 import express from "express";
 import { body, validationResult } from "express-validator";
 import { prisma } from "../config/prisma.js";
@@ -6,13 +5,12 @@ import { protect } from "../middleware/auth.js";
 
 const router = express.Router();
 
-/* -------------------- helpers -------------------- */
 const normalizeEmail = (e) =>
   (typeof e === "string" ? e.trim().toLowerCase() : e);
 
 const handleValidationErrors = (req, res, next) => {
   const errors = validationResult(req);
-  if (!errors.isEmpty())
+  if (!errors.isEmpty()) 
     return res.status(400).json({ success: false, errors: errors.array() });
   next();
 };
@@ -30,8 +28,6 @@ const asIntOrNull = (v) => {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 };
-
-/* =========================== COLLEGES =========================== */
 
 /** Create College (SUPER_ADMIN) */
 router.post(
@@ -200,8 +196,6 @@ router.delete(
   }
 );
 
-
-
 /** Create Department under a College */
 router.post(
   "/:collegeId/departments",
@@ -337,5 +331,27 @@ router.delete(
     }
   }
 );
+
+/** department getting route fro the admin/college */
+router.get("/departments", protect, async (req, res) => {
+  try {
+
+    const setting = await prisma.setting.findUnique({
+      where: { key: "departments" }, 
+    });
+
+    if (!setting) {
+      return res.status(404).json({ error: "Departments setting not found" });
+    }
+
+
+    const departments = setting.value;
+
+    res.json({ departments });
+  } catch (e) {
+    console.error("GET /settings/departments error:", e);
+    res.status(500).json({ error: "Internal error" });
+  }
+});
 
 export default router;

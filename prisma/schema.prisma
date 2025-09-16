@@ -44,37 +44,36 @@ model User {
 }
 
 model Registration {
-  id           String   @id @default(uuid())
-  fullName     String   @db.VarChar(150)
-  email        String   @unique @db.VarChar(150)
+    id           String   @id @default(uuid())
+    fullName     String   @db.VarChar(150)
+    email        String   @unique @db.VarChar(150)
 
-  
-  year         String?  @db.VarChar(20)
-  branch       String?  @db.VarChar(100)
-  academicYear String?  @db.VarChar(20)
-  rollNumber   String?  @db.VarChar(50)
+    
+    year         String?  @db.VarChar(20)
+    branch       String?  @db.VarChar(100)
+    academicYear String?  @db.VarChar(20)
+    rollNumber   String?  @db.VarChar(50)
 
-  collegeId    String
-  departmentId String?  
+    collegeId    String
+    departmentId String?  
 
-  role         String   @default("STUDENT")
-  status       String   @default("PENDING")
+    role         String   @default("STUDENT")
+    status       String   @default("PENDING")
 
-  otpHash      String?
-  otpExpires   DateTime?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+    otpHash      String?
+    otpExpires   DateTime?
+    createdAt    DateTime @default(now())
+    updatedAt    DateTime @updatedAt
 
-  college      College     @relation(fields: [collegeId], references: [id], onDelete: Cascade)
-  department   Department? @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+    college      College     @relation(fields: [collegeId], references: [id], onDelete: Cascade)
+    department   Department? @relation(fields: [departmentId], references: [id], onDelete: Cascade)
 
-  @@unique([collegeId, rollNumber])
-  @@index([collegeId])
-  @@index([departmentId])
-  @@index([role])
-  @@map("registrations")
-}
-
+    @@unique([collegeId, rollNumber])
+    @@index([collegeId])
+    @@index([departmentId])
+    @@index([role])
+    @@map("registrations")
+  }
 
 model College {
   id             String   @id @default(uuid())
@@ -150,7 +149,7 @@ model CoursesAssigned {
   id             String   @id @default(uuid())
   courseId       String
   collegeId      String
-  departmentId   String?          // optional tag to a Department
+  departmentId   String?          
   capacity       Int?
 
   createdAt      DateTime @default(now())
@@ -160,7 +159,7 @@ model CoursesAssigned {
   college      College    @relation(fields: [collegeId], references: [id], onDelete: Cascade)
   department   Department? @relation(fields: [departmentId], references: [id], onDelete: Cascade)
 
-  @@unique([courseId, collegeId])   // keep uniqueness at college level
+  @@unique([courseId, collegeId, departmentId])   
   @@index([collegeId])
   @@index([departmentId])
   @@map("courses_assigned")

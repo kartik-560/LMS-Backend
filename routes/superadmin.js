@@ -4,6 +4,13 @@ import { prisma } from "../config/prisma.js";
 const router = express.Router();
 
 const up = (s) => String(s || "").toUpperCase();
+const isSuperAdmin = (u) => up(u?.role) === "SUPER_ADMIN";
+const isCollegeAdmin = (u) => up(u?.role) === "ADMIN";
+
+async function assertAdminBelongsToCollege(user, collegeId) {
+  if (!isCollegeAdmin(user)) return false;
+  return String(user.collegeId) === String(collegeId);
+}
 
 const toUserPayload = (u) => ({
   id: u.id,
@@ -33,9 +40,6 @@ function requireSuperAdmin(req, res, next) {
   next();
 }
 
-/**
- * OVERVIEW — JS + your schema; avgCourseCompletion from ChapterProgress
- */
 router.get("/overview", requireSuperAdmin, async (_req, res) => {
   const [users, totalCourses] = await Promise.all([
     prisma.user.findMany({ select: { role: true, isActive: true } }),
@@ -96,9 +100,7 @@ router.get("/overview", requireSuperAdmin, async (_req, res) => {
   res.json({ overview, courseBreakdown });
 });
 
-/**
- * Lists (admins / instructors / students)
- */
+
 router.get("/admins", requireSuperAdmin, async (_req, res) => {
   const rows = await prisma.user.findMany({
     where: { role: { equals: "ADMIN", mode: "insensitive" } },
@@ -136,16 +138,11 @@ router.get("/students", requireSuperAdmin, async (_req, res) => {
   res.json(data);
 });
 
-/**
- * PATCH USER PERMISSIONS — not supported on model
- */
+
 router.patch("/users/:id/permissions", requireSuperAdmin, async (_req, res) => {
   return res.status(501).json({ error: "Permissions not supported on User model" });
 });
 
-/**
- * BULK UPDATE USERS
- */
 router.post("/users/bulk-update", requireSuperAdmin, async (req, res) => {
   const { ids, data } = req.body || {};
   if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: "ids required" });
@@ -153,9 +150,6 @@ router.post("/users/bulk-update", requireSuperAdmin, async (req, res) => {
   res.json({ count: result.count });
 });
 
-/**
- * DELETE USER — aligned to new schema
- */
 router.delete("/users/:id", requireSuperAdmin, async (req, res) => {
   const { id } = req.params;
 
@@ -173,11 +167,6 @@ router.delete("/users/:id", requireSuperAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
-/**
- * SINGLE COURSES LIST ENDPOINT — views via query params
- *
- * view: "all" | "assigned" | "enrolled" | "createdBy"
- */
 router.get("/courses", async (req, res) => {
   if (!req.user) return res.status(401).json({ error: "Unauthorized" });
 
@@ -342,9 +331,6 @@ router.get("/courses", async (req, res) => {
   return res.status(400).json({ error: `Unknown view '${view}'` });
 });
 
-/**
- * CREATE / UPDATE / DELETE COURSES
- */
 router.post("/courses", requireSuperAdmin, async (req, res) => {
   const { title, thumbnail, creatorId, status, category, description } = req.body || {};
   if (!title || !creatorId) return res.status(400).json({ error: "title and creatorId are required" });
@@ -394,46 +380,125 @@ router.delete("/courses/:id", requireSuperAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
-/**
- * ASSIGN / UNASSIGN COURSE TO COLLEGE/DEPARTMENT
- */
-router.post("/courses/:id/assign", requireSuperAdmin, async (req, res) => {
-  const { id } = req.params;
-  const { collegeId, departmentId, capacity } = req.body || {};
-  if (!collegeId) return res.status(400).json({ error: "collegeId is required" });
+router.post("/courses/:id/assign", async (req, res) => {
+  try {
+    if (!req.user) return res.status(401).json({ error: "Unauthorized" });
 
-  await prisma.coursesAssigned.upsert({
-    where: { courseId_collegeId: { courseId: id, collegeId } },
-    create: { courseId: id, collegeId, departmentId: departmentId ?? null, capacity: capacity ?? null },
-    update: { departmentId: departmentId ?? null, capacity: capacity ?? null },
-  });
+    const { id: courseId } = req.params;
+    const { collegeId, departmentId = null, capacity = null } = req.body || {};
+    if (!collegeId) return res.status(400).json({ error: "collegeId is required" });
 
-  res.json({ ok: true });
+    // ADMIN guardrails
+    if (isCollegeAdmin(req.user)) {
+      const allowed = await assertAdminBelongsToCollege(req.user, collegeId);
+      if (!allowed) return res.status(403).json({ error: "Forbidden: not an admin of this college" });
+
+      // Admins may NOT create/modify the college-level row
+      if (!departmentId) {
+        return res.status(403).json({ error: "Forbidden: college-level assignment can only be created by SUPER_ADMIN" });
+      }
+
+      // Admins can only assign to departments if the college-level assignment exists
+      const collegeLevel = await prisma.coursesAssigned.findUnique({
+        where: { courseId_collegeId_departmentId: { courseId, collegeId, departmentId: null } },
+        select: { id: true },
+      });
+      if (!collegeLevel) {
+        return res.status(409).json({ error: "Course is not assigned to this college yet (SUPER_ADMIN must assign first)" });
+      }
+    }
+
+    // SUPER_ADMIN has no extra checks; ADMIN passed the above checks.
+    const row = await prisma.coursesAssigned.upsert({
+      where: { courseId_collegeId_departmentId: { courseId, collegeId, departmentId } },
+      create: { courseId, collegeId, departmentId, capacity },
+      update: { capacity },
+    });
+
+    return res.json({ ok: true, assignment: row });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
 });
 
-router.delete("/courses/:id/unassign", requireSuperAdmin, async (req, res) => {
-  const { id } = req.params;
-  const { collegeId } = req.body || {};
-  if (!collegeId) return res.status(400).json({ error: "collegeId is required" });
+router.delete("/courses/:id/unassign", async (req, res) => {
+  try {
+    if (!req.user) return res.status(401).json({ error: "Unauthorized" });
 
-  await prisma.coursesAssigned.delete({
-    where: { courseId_collegeId: { courseId: id, collegeId } },
-  });
+    const { id: courseId } = req.params;
+    const { collegeId, departmentId = null } = req.body || {};
+    if (!collegeId) return res.status(400).json({ error: "collegeId is required" });
 
-  res.json({ ok: true });
+    if (isCollegeAdmin(req.user)) {
+      const allowed = await assertAdminBelongsToCollege(req.user, collegeId);
+      if (!allowed) return res.status(403).json({ error: "Forbidden: not an admin of this college" });
+
+      // Admins may only remove dept-level rows
+      if (!departmentId) {
+        return res.status(403).json({ error: "Forbidden: cannot remove college-level assignment" });
+      }
+
+      await prisma.coursesAssigned.delete({
+        where: { courseId_collegeId_departmentId: { courseId, collegeId, departmentId } },
+      });
+      return res.json({ ok: true });
+    }
+
+    if (isSuperAdmin(req.user)) {
+      if (departmentId) {
+        // remove specific dept-level row
+        await prisma.coursesAssigned.delete({
+          where: { courseId_collegeId_departmentId: { courseId, collegeId, departmentId } },
+        });
+      } else {
+        // remove college-level row + all its department rows atomically
+        await prisma.$transaction([
+          prisma.coursesAssigned.deleteMany({
+            where: { courseId, collegeId, NOT: { departmentId: null } },
+          }),
+          prisma.coursesAssigned.delete({
+            where: { courseId_collegeId_departmentId: { courseId, collegeId, departmentId: null } },
+          }),
+        ]);
+      }
+      return res.json({ ok: true });
+    }
+
+    return res.status(403).json({ error: "Forbidden" });
+  } catch (e) {
+    // if trying to delete non-existing row, handle gracefully
+    if (e.code === "P2025") {
+      return res.status(404).json({ error: "Assignment not found" });
+    }
+    console.error(e);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
 });
 
-/**
- * CHAPTERS
- */
-router.get("/courses/:courseId/chapters", requireSuperAdmin, async (req, res) => {
-  const { courseId } = req.params;
-  const rows = await prisma.chapter.findMany({
-    where: { courseId },
-    orderBy: { order: "asc" },
-    select: { id: true, title: true, slug: true, order: true, isPreview: true, isPublished: true },
-  });
-  res.json(rows);
+
+router.get("/courses/:id/assignments", async (req, res) => {
+  try {
+    const { id: courseId } = req.params;
+    const rows = await prisma.coursesAssigned.findMany({
+      where: { courseId },
+      orderBy: [{ collegeId: "asc" }, { departmentId: "asc" }],
+    });
+    // group by college for convenience
+    const grouped = rows.reduce((acc, r) => {
+      const key = r.collegeId;
+      acc[key] = acc[key] || { collegeLevel: null, departments: [] };
+      if (r.departmentId === null) acc[key].collegeLevel = r;
+      else acc[key].departments.push(r);
+      return acc;
+    }, {});
+    res.json({ ok: true, assignments: grouped });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
 });
+
+
 
 export default router;

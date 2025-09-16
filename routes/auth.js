@@ -1,14 +1,12 @@
-// routes/auth.js
 import express from "express";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { body, validationResult } from "express-validator";
 import multer from "multer";
 import xlsx from "xlsx";
-
 import { protect } from "../middleware/auth.js";
 import { prisma } from "../config/prisma.js";
-import { sendEmail } from "../utils/sendEmail.js"; // implement sendEmail({to, subject, text, html})
+import { sendEmail } from "../utils/sendEmail.js"; 
 
 const router = express.Router();
 
@@ -44,7 +42,6 @@ const authorize = (...roles) => (req, res, next) => {
   next();
 };
 
-// Optional auth: attach req.user if a valid Bearer token is present, otherwise continue.
 const optionalProtect = async (req, _res, next) => {
   try {
     const hdr = req.headers.authorization || "";
@@ -76,7 +73,6 @@ const hashOtp = async (otp) => bcrypt.hash(otp, 8);
 
 const appBase = process.env.APP_BASE_URL || "http://localhost:5173";
 
-
 const loadDepartmentCatalog = async () => {
   const rec = await prisma.setting.findUnique({
     where: { key: "departments_catalog" },
@@ -103,7 +99,6 @@ router.get("/signup/departments-catalog", async (_req, res) => {
   const items = await loadDepartmentCatalog();
   return res.json({ success: true, data: { items } });
 });
-
 
 router.post(
   "/registrations",
@@ -349,8 +344,6 @@ router.post(
     }
   }
 );
-
-
 
 router.post(
   "/signup/begin",
