@@ -1,29 +1,33 @@
 import express from "express";
 import { prisma } from "../config/prisma.js";
-import { requireAdmin } from "../middleware/roles.js";  // assuming roles.js contains the requireRole function
 
 const router = express.Router();
+
+/**
+ * Middleware to check if user is ADMIN or SUPER_ADMIN
+ */
+function requireAdmin(req, res, next) {
+  if (!req.user) {
+    return res.status(401).json({ error: "Unauthorized: No user found" });
+  }
+
+  const role = String(req.user.role || "").toUpperCase();
+
+  if (role === "ADMIN" || role === "SUPER_ADMIN") {
+    return next(); // ✅ allow access
+  }
+
+  return res.status(403).json({ error: "Forbidden: Admin access required" });
+}
 
 // GET /courses/:courseId/chapters - Admin & SuperAdmin accessible (with different data)
 router.get("/courses/:courseId/chapters", requireAdmin, async (req, res) => {
   const courseId = String(req.params.courseId);
 
-  // Check if user is super admin
   const isSuperAdmin = String(req.user?.role || "").toUpperCase() === "SUPER_ADMIN";
 
-  // Define fields to be selected based on role
-  const baseSelect = { 
-    id: true, 
-    title: true, 
-    order: true, 
-    isPublished: true 
-  };
-
-  const superAdminSelect = { 
-    ...baseSelect, 
-    slug: true, 
-    isPreview: true 
-  };
+  const baseSelect = { id: true, title: true, order: true, isPublished: true };
+  const superAdminSelect = { ...baseSelect, slug: true, isPreview: true };
 
   const select = isSuperAdmin ? superAdminSelect : baseSelect;
 
@@ -31,7 +35,7 @@ router.get("/courses/:courseId/chapters", requireAdmin, async (req, res) => {
     const rows = await prisma.chapter.findMany({
       where: { courseId },
       orderBy: { order: "asc" },
-      select,  
+      select,
     });
     res.json(rows);
   } catch (error) {

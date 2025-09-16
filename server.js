@@ -8,14 +8,14 @@ import { fileURLToPath } from "url";
 import serverless from "serverless-http";
 import "dotenv/config.js";
 import { testConnection } from "./config/prisma.js";
-import debugEmail from "./routes/debug-email.js";
+
 import { protect } from "./middleware/auth.js";
 import uploadsRouter from "./routes/upload.js";
 import authRouter from "./routes/auth.js";
 
 import superAdminRouter from "./routes/superadmin.js";
 import adminRouter from "./routes/admin.js";
-import coursesRouter from "./routes/courses.js";
+
 import chapterRouter from "./routes/chapter.js";
 import enrollmentsRouter from "./routes/enrollments.js";
 import assessmentsRouter from "./routes/assessments.js";
@@ -29,7 +29,7 @@ if (!process.env.DATABASE_URL) {
   process.exit(1);
 }
 const app = express();
-app.use("/debug", debugEmail);
+
 const ALLOWED_ORIGINS = [
   "http://localhost:5173", // dev Vite
   "http://localhost:3000", // dev Next
@@ -103,13 +103,12 @@ app.get("/health", (_req, res) => {
 
 // Routes
 app.use("/api/auth", authRouter);
-// app.use("/api/users", usersRouter);
+
 
 app.use("/api/colleges", collegesRouter);
 
 app.use("/api/superadmin", protect, superAdminRouter);
 app.use("/api/admin", protect, adminRouter);
-app.use("/api/courses", protect, coursesRouter);
 app.use("/api/uploads", express.static(path.resolve("uploads")));
 app.use("/api/uploads", uploadsRouter);
 app.use("/api", protect, chapterRouter);

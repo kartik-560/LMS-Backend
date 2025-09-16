@@ -23,10 +23,6 @@ async function assertAdminBelongsToCollege(user, collegeId) {
 }
 
 
-async function assertAdminBelongsToCollege(user, collegeId) {
-  if (!isAdmin(user)) return false;
-  return String(user.collegeId) === String(collegeId);
-}
 
 router.post("/courses", requireAdmin, async (req, res) => {
   try {
