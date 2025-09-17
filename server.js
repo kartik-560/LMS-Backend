@@ -8,7 +8,7 @@ import { fileURLToPath } from "url";
 import serverless from "serverless-http";
 import "dotenv/config.js";
 import { testConnection } from "./config/prisma.js";
-
+import crypto from 'crypto';
 import { protect } from "./middleware/auth.js";
 import uploadsRouter from "./routes/upload.js";
 import authRouter from "./routes/auth.js";
@@ -31,15 +31,16 @@ if (!process.env.DATABASE_URL) {
 const app = express();
 
 const ALLOWED_ORIGINS = [
-  "http://localhost:5173", 
-  "http://localhost:3000", 
-  "https://lms-vhfz.vercel.app", 
+  "http://localhost:5173",
+  "http://localhost:3000",
+  "https://lms-vhfz.vercel.app",
 ];
+
 
 app.use(
   cors({
     origin: ALLOWED_ORIGINS,
-    credentials: false,
+    credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: [
       "Content-Type",
@@ -50,35 +51,16 @@ app.use(
       "Accept",
       "X-Requested-With",
     ],
-    exposedHeaders: [],
     optionsSuccessStatus: 204,
   })
 );
-
-app.options(
-  "*",
-  cors({
-    origin: ALLOWED_ORIGINS,
-    credentials: false,
-    allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-      "Cache-Control",
-      "Pragma",
-      "Expires",
-      "Accept",
-      "X-Requested-With",
-    ],
-  })
-);
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Security & essentials
 app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 const origins = (process.env.CORS_ORIGIN || "").split(",").filter(Boolean);
-app.use(cors({ origin: origins.length ? origins : true, credentials: true }));
+
 
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));

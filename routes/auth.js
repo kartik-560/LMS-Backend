@@ -6,42 +6,128 @@ import multer from "multer";
 import xlsx from "xlsx";
 import { protect } from "../middleware/auth.js";
 import { prisma } from "../config/prisma.js";
-import { sendEmail } from "../utils/sendEmail.js"; 
+import { sendEmail } from "../utils/sendEmail.js";
+import { Strategy as GoogleStrategy } from "passport-google-oauth20";
+import passport from "passport";
+import expressSession from "express-session";
 
 const router = express.Router();
 
-/* ------------------------------- utils -------------------------------- */
+
+passport.serializeUser((user, done) => {
+  done(null, user.id);  // You can store the user ID in the session
+});
+
+// Deserialize the user from the session
+passport.deserializeUser(async (id, done) => {
+  try {
+    const user = await prisma.user.findUnique({ where: { id } });
+    done(null, user);  // Attach the user object to the request
+  } catch (error) {
+    done(error, null);
+  }
+});
+router.use(
+  expressSession({
+    secret: process.env.SESSION_SECRET || "your-secret-key",
+    resave: false,
+    saveUninitialized: false,
+    cookie: { secure: process.env.NODE_ENV === "production" },
+  })
+);
+
+// Initialize Passport and session
+router.use(passport.initialize());
+router.use(passport.session());
+
+// Google OAuth Strategy Setup
+passport.use(new GoogleStrategy({
+  clientID: process.env.GOOGLE_CLIENT_ID,
+  clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+  callbackURL: `${process.env.APP_BASE_URL}/api/auth/google/callback`,
+}, async (accessToken, refreshToken, profile, done) => {
+  try {
+    let user = await prisma.user.findUnique({
+      where: { email: profile.emails[0].value },
+    });
+
+    if (!user) {
+      user = await prisma.user.create({
+        data: {
+          fullName: profile.displayName,
+          email: profile.emails[0].value,
+          role: "STUDENT",  // Default role for Google login
+          authProvider: "google",
+        },
+      });
+    }
+
+    return done(null, user);  // The user object is passed to the session
+  } catch (error) {
+    return done(error, null);
+  }
+}));
+
+// Google OAuth login route
+router.get("/google", passport.authenticate("google", {
+  scope: ["profile", "email"],
+}));
+
+// Google OAuth callback route
+router.get("/google/callback",
+  passport.authenticate("google", { failureRedirect: "/login" }),
+  (req, res) => {
+    const token = jwt.sign(
+      {
+        sub: req.user.id,
+        role: req.user.role,
+        tokenVersion: req.user.tokenVersion,
+      },
+      process.env.JWT_SECRET || "dev-secret",
+      { expiresIn: "7d" }
+    );
+
+    res.redirect(`/dashboard?token=${token}`);
+  }
+);
+
+
 const normalizeEmail = (e) =>
   (typeof e === "string" ? e.trim().toLowerCase() : e);
 
+
 const handleValidationErrors = (req, res, next) => {
   const errors = validationResult(req);
-  if (!errors.isEmpty())
+  if (!errors.isEmpty()) {
     return res.status(400).json({ success: false, errors: errors.array() });
+  }
   next();
 };
+
 
 const signToken = (user) =>
   jwt.sign(
     {
       sub: user.id,
       role: user.role,
-      tokenVersion: user.tokenVersion,   
-      
+      tokenVersion: user.tokenVersion,
     },
     process.env.JWT_SECRET || "dev-secret",
     { expiresIn: "7d" }
   );
 
+// Authorization middleware to restrict access by roles
 const authorize = (...roles) => (req, res, next) => {
   if (!req.user)
     return res.status(401).json({ success: false, message: "Unauthorized" });
+
   const role = String(req.user.role || "").toUpperCase();
   if (!roles.map((r) => r.toUpperCase()).includes(role))
     return res.status(403).json({ success: false, message: "Forbidden" });
   next();
 };
 
+// Optional session-based protect route for authenticated users
 const optionalProtect = async (req, _res, next) => {
   try {
     const hdr = req.headers.authorization || "";
@@ -62,6 +148,7 @@ const optionalProtect = async (req, _res, next) => {
   next();
 };
 
+// multer upload configuration
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 8 * 1024 * 1024 },
@@ -100,8 +187,7 @@ router.get("/signup/departments-catalog", async (_req, res) => {
   return res.json({ success: true, data: { items } });
 });
 
-router.post(
-  "/registrations",
+router.post("/registrations",
   [
     protect,
     authorize("SUPER_ADMIN"),
@@ -207,8 +293,7 @@ router.post(
   }
 );
 
-router.post(
-  "/registrations/bulk",
+router.post("/registrations/bulk",
   [protect, authorize("SUPER_ADMIN"), upload.single("file")],
   async (req, res) => {
     try {
@@ -345,8 +430,7 @@ router.post(
   }
 );
 
-router.post(
-  "/signup/begin",
+router.post("/signup/begin",
   [body("email").exists().isEmail(), handleValidationErrors],
   async (req, res) => {
     const email = normalizeEmail(req.body.email);
@@ -396,191 +480,172 @@ router.post(
     const { otp } = req.body;
 
     const reg = await prisma.registration.findUnique({ where: { email } });
-    if (!reg || reg.status === "COMPLETED")
-      return res
-        .status(404)
-        .json({ success: false, message: "Registration not found or already completed" });
+    if (!reg || reg.status === "COMPLETED") {
+      return res.status(404).json({
+        success: false,
+        message: "Registration not found or already completed",
+      });
+    }
 
-    if (!reg.otpHash || !reg.otpExpires || reg.otpExpires < new Date())
-      return res.status(400).json({ success: false, message: "OTP expired. Please request a new one." });
+    if (!reg.otpHash || !reg.otpExpires || reg.otpExpires < new Date()) {
+      return res.status(400).json({
+        success: false,
+        message: "OTP expired. Please request a new one.",
+      });
+    }
 
     const ok = await bcrypt.compare(String(otp), reg.otpHash);
-    if (!ok) return res.status(400).json({ success: false, message: "Invalid OTP" });
+    if (!ok) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid OTP",
+      });
+    }
 
-    await prisma.registration.update({
+    // After OTP is verified, allow 'complete' for next 30 minutes
+    const completeBy = new Date(Date.now() + 30 * 60 * 1000);
+
+    const updated = await prisma.registration.update({
       where: { id: reg.id },
-      data: { status: "VERIFIED", otpHash: null, otpExpires: null },
+      data: {
+        status: "VERIFIED",
+        otpHash: null,          // cannot reuse the OTP
+        otpExpires: completeBy, // repurpose as "complete-by" deadline
+      },
     });
 
-    const token = jwt.sign(
-      { kind: "signup_complete", registrationId: reg.id, email: reg.email },
-      process.env.JWT_SECRET || "dev-secret",
-      { expiresIn: "30m" }
-    );
-
-    res.json({ success: true, data: { token } });
+    // send registration data back with response
+    return res.json({
+      success: true,
+      message: "OTP verified. Please complete signup within 30 minutes.",
+      registration: {
+        id: updated.id,
+        fullName: updated.fullName,
+        email: updated.email,
+        role: updated.role,
+        collegeId: updated.collegeId,
+        year: updated.year,
+        branch: updated.branch,
+        academicYear: updated.academicYear,
+        rollNumber: updated.rollNumber,
+        status: updated.status,
+        otpExpires: updated.otpExpires, // renamed "completeBy"
+      },
+    });
   }
 );
 
+
 /** STEP 3: Complete – create User; Admin/Instructor may pick departmentKeys (from catalog) */
-router.post(
-  "/signup/complete",
+router.post("/signup/complete",
   [
-    body("token").exists().isString(),
+    body("email").exists().isEmail(),
     body("password").exists().isLength({ min: 6 }),
-    body("fullName").optional().isLength({ min: 2, max: 100 }),
-    body("mobile").optional().isString(),
-    body("departmentKeys").optional().isArray({ min: 1 }),
-    body("departmentKeys.*").isString(),
+    body("fullName").exists().isLength({ min: 2, max: 100 }),
+    body("year").optional().isString().isLength({ max: 10 }),
+    body("branch").optional().isString().isLength({ max: 100 }),
+    body("mobile").optional().isString().isLength({ max: 20 }),
+    // ignore any extra fields from the client
     handleValidationErrors,
   ],
   async (req, res) => {
     try {
-      const { token, password, fullName, mobile } = req.body;
+      const normEmail = normalizeEmail(req.body.email);
+      const { password, fullName, year, branch, mobile } = req.body;
 
-      let decoded;
-      try {
-        decoded = jwt.verify(token, process.env.JWT_SECRET || "dev-secret");
-      } catch {
-        return res
-          .status(400)
-          .json({ success: false, message: "Invalid or expired token" });
+      // 1) Ensure there is a verified registration session still valid
+      const reg = await prisma.registration.findUnique({ where: { email: normEmail } });
+      if (!reg) {
+        return res.status(404).json({ success: false, message: "Registration not found" });
       }
-      if (decoded.kind !== "signup_complete")
-        return res
-          .status(400)
-          .json({ success: false, message: "Invalid token kind" });
+      if (reg.status !== "VERIFIED") {
+        return res.status(400).json({ success: false, message: "Please verify OTP first" });
+      }
+      if (!reg.otpExpires || reg.otpExpires < new Date()) {
+        return res.status(400).json({
+          success: false,
+          message: "Signup session expired. Please verify OTP again.",
+        });
+      }
 
-      const reg = await prisma.registration.findUnique({
-        where: { id: decoded.registrationId },
-      });
-      if (!reg || reg.email !== decoded.email)
-        return res
-          .status(404)
-          .json({ success: false, message: "Registration not found" });
+      // 2) Prevent duplicates
+      const exists = await prisma.user.findUnique({ where: { email: normEmail } });
+      if (exists) {
+        return res.status(409).json({ success: false, message: "User already exists with this email" });
+      }
 
-      if (reg.status !== "VERIFIED")
-        return res
-          .status(400)
-          .json({ success: false, message: "Please verify OTP first" });
-
-      const existingUser = await prisma.user.findUnique({
-        where: { email: normalizeEmail(reg.email) },
-      });
-      if (existingUser)
-        return res
-          .status(409)
-          .json({ success: false, message: "User already exists with this email" });
-
+      // 3) Hash password (if you ever support SSO, allow empty password for non-credentials)
       const hash = await bcrypt.hash(String(password), 10);
 
-      const roleUpper = String(reg.role || "STUDENT").toUpperCase();
+      // 4) Role is server-decided (from registration), never from client
+      const role = String(reg.role || "student").toLowerCase();
 
-      // Admin/Instructor: accept departmentKeys from catalog; ensure/create Dept rows under College
-      let selectedDepartmentIds = [];
-      if (["ADMIN", "INSTRUCTOR"].includes(roleUpper)) {
-        const selectedKeys = Array.isArray(req.body.departmentKeys)
-          ? req.body.departmentKeys
-          : [];
+      // 5) Build a safe insert payload
+      const userData = {
+        email: normEmail,
+        password: hash,
+        authProvider: "credentials",
+        role,
+        tokenVersion: 0,
+        isEmailVerified: true,
+        isActive: true,
+        fullName: String(fullName).trim(),
+        year: year ?? null,
+        branch: branch ?? null,
+        mobile: mobile ?? null,
+        mustChangePassword: false,
+        // permissions come from your registration flow (if any)
+        permissions: {},
+      };
 
-        if (selectedKeys.length > 0) {
-          const catalog = await loadDepartmentCatalog();
-          const matchMap = new Map();
-          for (const item of catalog) {
-            matchMap.set(item.key.toLowerCase(), item);
-            matchMap.set(item.name.toLowerCase(), item);
-          }
-
-          const chosen = [];
-          for (const raw of selectedKeys) {
-            const key = String(raw).trim().toLowerCase();
-            const hit = matchMap.get(key);
-            if (!hit) {
-              return res.status(400).json({
-                success: false,
-                message: `Unknown department: ${raw}`,
-              });
-            }
-            chosen.push(hit); // {key,name}
-          }
-
-          // Ensure existence under this college; create if missing
-          for (const d of chosen) {
-            const existing = await prisma.department.findFirst({
-              where: {
-                collegeId: reg.collegeId,
-                name: { equals: d.name, mode: "insensitive" },
-              },
-              select: { id: true },
-            });
-            if (existing) {
-              selectedDepartmentIds.push(existing.id);
-            } else {
-              const createdDept = await prisma.department.create({
-                data: { name: d.name, collegeId: reg.collegeId },
-                select: { id: true },
-              });
-              selectedDepartmentIds.push(createdDept.id);
-            }
-          }
-        }
+      // If you keep the admin/instructor department selection via catalog, reuse your earlier logic here
+      if (["admin", "instructor"].includes(role)) {
+        // Option A: if you already stored this in registration, pull it from there
+        // Option B: accept a vetted list from body (not shown here)
+        userData.permissions = {
+          collegeId: reg.collegeId ?? null,
+          departmentIds: reg.departmentIds ?? [], // if you stored them during verify step or earlier
+        };
       }
 
-      const basePermissions = {};
-      if (["ADMIN", "INSTRUCTOR"].includes(roleUpper)) {
-        basePermissions.collegeId = reg.collegeId;
-        basePermissions.departmentIds = selectedDepartmentIds; // may be []
-      }
+      // 6) Create user + mark registration completed (transactional)
+      const result = await prisma.$transaction(async (tx) => {
+        const createdUser = await tx.user.create({
+          data: userData,
+          select: {
+            id: true,
+            email: true,
+            fullName: true,
+            role: true,
+            isActive: true,
+            permissions: true,
+            authProvider: true,
+          },
+        });
 
-      const createdUser = await prisma.user.create({
-        data: {
-          fullName: fullName?.trim() || reg.fullName,
-          email: normalizeEmail(reg.email),
-          password: hash,
-          authProvider: "credentials",
-          role: String(reg.role || "STUDENT").toLowerCase(),
-          isEmailVerified: true,
-          isActive: true,
-          year: reg.year || null,
-          branch: reg.branch || null,
-          mobile: mobile || null,
-          permissions: basePermissions,
-        },
-        select: {
-          id: true,
-          fullName: true,
-          email: true,
-          role: true,
-          isActive: true,
-          permissions: true,
-          authProvider: true,
-        },
+        await tx.registration.update({
+          where: { id: reg.id },
+          data: { status: "COMPLETED" },
+        });
+
+        return createdUser;
       });
 
-      await prisma.registration.update({
-        where: { id: reg.id },
-        data: { status: "COMPLETED" },
-      });
-
-      res.status(201).json({
+      return res.status(201).json({
         success: true,
         message: "Account created. Please log in to receive a token.",
-        data: { user: createdUser },
+        data: { user: result },
       });
     } catch (err) {
-      if (err.code === "P2002")
-        return res
-          .status(400)
-          .json({ success: false, message: "Email already in use" });
-      res
-        .status(500)
-        .json({ success: false, message: err?.message || "Signup failed" });
+      if (err?.code === "P2002") {
+        return res.status(400).json({ success: false, message: "Email already in use" });
+      }
+      return res.status(500).json({ success: false, message: err?.message || "Signup failed" });
     }
   }
 );
 
-router.post(
-  "/register-user",
+router.post( "/register-user",
   [
     optionalProtect,
     body("fullName").exists().trim().isLength({ min: 2, max: 100 }),
@@ -704,37 +769,38 @@ router.post(
 /** Password (credentials) login */
 router.post("/login", async (req, res, next) => {
   try {
-    const email = normalizeEmail(req.body.email);
-    const { password } = req.body;
-    if (!email || !password)
-      return res
-        .status(400)
-        .json({ success: false, message: "email and password are required" });
+    const { email, password } = req.body;
 
-    const user = await prisma.user.findUnique({ where: { email } });
-    if (!user)
-      return res.status(401).json({ success: false, message: "Invalid credentials" });
-
-    if (
-      String(user.authProvider || "credentials").toLowerCase() !==
-        "credentials" ||
-      !user.password
-    ) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Use your configured provider to sign in" });
+    // Validate input
+    if (!email || !password) {
+      return res.status(400).json({ success: false, message: "Email and password are required" });
     }
 
-    const ok = await bcrypt.compare(password, user.password);
-    if (!ok)
+    const user = await prisma.user.findUnique({ where: { email: normalizeEmail(email) } });
+    if (!user) {
       return res.status(401).json({ success: false, message: "Invalid credentials" });
+    }
 
+    // Check if user uses credentials provider and has a password
+    if (user.authProvider !== "credentials" || !user.password) {
+      return res.status(400).json({ success: false, message: "Use your configured provider to sign in" });
+    }
+
+    // Verify password
+    const passwordMatches = await bcrypt.compare(password, user.password);
+    if (!passwordMatches) {
+      return res.status(401).json({ success: false, message: "Invalid credentials" });
+    }
+
+    // Update lastLogin timestamp
     await prisma.user.update({
       where: { id: user.id },
       data: { lastLogin: new Date() },
     });
 
-    const token = signToken(user);
+    // Generate token
+    const token = signToken(user); // Ensure your `signToken()` function signs a JWT with a secret
+
     const payload = {
       id: user.id,
       fullName: user.fullName,
@@ -747,148 +813,10 @@ router.post("/login", async (req, res, next) => {
 
     res.json({ success: true, data: { user: payload, token } });
   } catch (err) {
-    next(err);
+    next(err); // Pass error to the error handler
   }
 });
 
-/* ---------------------- LOGIN WITH OTP (any non-super_admin) ------------------ */
-// Step 1
-router.post(
-  "/login/otp/begin",
-  [body("email").exists().isEmail(), handleValidationErrors],
-  async (req, res) => {
-    const email = normalizeEmail(req.body.email);
-
-    const neutral = () =>
-      res.json({
-        success: true,
-        message:
-          "If this email is registered, an OTP has been sent and will expire in 10 minutes.",
-      });
-
-    try {
-      const user = await prisma.user.findUnique({ where: { email } });
-      if (!user) return neutral();
-
-      // Block OTP login for super_admin (stay neutral)
-      if (String(user.role || "").toLowerCase() === "super_admin") {
-        return neutral();
-      }
-
-      // Allow OTP login only for credentials users
-      const isCreds =
-        String(user.authProvider || "credentials").toLowerCase() ===
-        "credentials";
-      if (!isCreds) return neutral();
-
-      const otp = genOtp();
-      const otpHash = await hashOtp(otp);
-      const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
-
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { passwordResetToken: otpHash, passwordResetExpires: otpExpires },
-      });
-
-      await sendEmail({
-        to: email,
-        subject: "Your login OTP",
-        text: `Your OTP is ${otp}. It expires in 10 minutes.`,
-        html: `<p>Your login OTP is <b>${otp}</b>. It expires in 10 minutes.</p>`,
-      });
-
-      return neutral();
-    } catch (_e) {
-      return neutral();
-    }
-  }
-);
-
-// Step 2
-router.post(
-  "/login/otp/verify",
-  [
-    body("email").exists().isEmail(),
-    body("otp").exists().isLength({ min: 6, max: 6 }),
-    handleValidationErrors,
-  ],
-  async (req, res) => {
-    const email = normalizeEmail(req.body.email);
-    const { otp } = req.body;
-
-    const user = await prisma.user.findUnique({ where: { email } });
-    if (!user)
-      return res
-        .status(400)
-        .json({ success: false, message: "Invalid OTP or email" });
-
-    // Block OTP for super_admin
-    if (String(user.role || "").toLowerCase() === "super_admin") {
-      return res.status(400).json({
-        success: false,
-        message: "OTP login is not enabled for this account.",
-      });
-    }
-
-    const isCreds =
-      String(user.authProvider || "credentials").toLowerCase() === "credentials";
-    if (!isCreds)
-      return res
-        .status(400)
-        .json({ success: false, message: "Use your SSO provider to sign in" });
-
-    if (
-      !user.passwordResetToken ||
-      !user.passwordResetExpires ||
-      user.passwordResetExpires < new Date()
-    ) {
-      return res
-        .status(400)
-        .json({ success: false, message: "OTP expired or invalid" });
-    }
-
-    const ok = await bcrypt.compare(String(otp), user.passwordResetToken);
-    if (!ok)
-      return res
-        .status(400)
-        .json({ success: false, message: "OTP expired or invalid" });
-
-    // 🔒 Invalidate all other sessions on OTP login too
-    const updated = await prisma.user.update({
-      where: { id: user.id },
-      data: {
-        passwordResetToken: null,
-        passwordResetExpires: null,
-        lastLogin: new Date(),
-        tokenVersion: { increment: 1 },
-      },
-      select: {
-        id: true,
-        fullName: true,
-        email: true,
-        role: true,
-        isActive: true,
-        permissions: true,
-        authProvider: true,
-        tokenVersion: true, // needed for JWT
-        lastLogin: true,
-      },
-    });
-
-    const token = signToken(updated);
-    const payload = {
-      id: updated.id,
-      fullName: updated.fullName,
-      email: updated.email,
-      role: updated.role,
-      isActive: updated.isActive,
-      permissions: updated.permissions || {},
-      authProvider: updated.authProvider,
-    };
-
-    return res.json({ success: true, data: { user: payload, token } });
-  }
-);
 
 router.post("/logout", protect, async (req, res) => {
   await prisma.user.update({
@@ -898,8 +826,7 @@ router.post("/logout", protect, async (req, res) => {
   res.json({ success: true, message: "Logged out" });
 });
 /* --------------------- PASSWORD RESET via OTP (3-step) -------------------- */
-router.post(
-  "/password/forgot-otp",
+router.post("/password/forgot-otp",
   [body("email").exists().isEmail(), handleValidationErrors],
   async (req, res) => {
     const email = normalizeEmail(req.body.email);
@@ -946,8 +873,7 @@ router.post(
   }
 );
 
-router.post(
-  "/password/verify-otp",
+router.post("/password/verify-otp",
   [
     body("email").exists().isEmail(),
     body("otp").exists().isLength({ min: 6, max: 6 }),
@@ -1006,8 +932,7 @@ router.post(
   }
 );
 
-router.post(
-  "/password/reset-with-token",
+router.post( "/password/reset-with-token",
   [
     body("token").exists().isString(),
     body("newPassword").exists().isLength({ min: 6 }),
@@ -1103,8 +1028,7 @@ router.get("/me", async (req, res, next) => {
   }
 });
 
-router.put(
-  "/me",
+router.put( "/me",
   [
     body("fullName").optional().trim().isLength({ min: 2, max: 100 }),
     body("email").optional().isEmail(),
@@ -1219,8 +1143,7 @@ router.put(
   }
 );
 
-router.delete(
-  "/me",
+router.delete("/me",
   [body("password").optional().isLength({ min: 6 }), handleValidationErrors],
   async (req, res, next) => {
     try {
