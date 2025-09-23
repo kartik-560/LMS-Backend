@@ -13,16 +13,15 @@ import expressSession from "express-session";
 
 const router = express.Router();
 
-
 passport.serializeUser((user, done) => {
-  done(null, user.id);  // You can store the user ID in the session
+  done(null, user.id); // You can store the user ID in the session
 });
 
 // Deserialize the user from the session
 passport.deserializeUser(async (id, done) => {
   try {
     const user = await prisma.user.findUnique({ where: { id } });
-    done(null, user);  // Attach the user object to the request
+    done(null, user); // Attach the user object to the request
   } catch (error) {
     done(error, null);
   }
@@ -41,40 +40,49 @@ router.use(passport.initialize());
 router.use(passport.session());
 
 // Google OAuth Strategy Setup
-passport.use(new GoogleStrategy({
-  clientID: process.env.GOOGLE_CLIENT_ID,
-  clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-  callbackURL: `${process.env.APP_BASE_URL}/api/auth/google/callback`,
-}, async (accessToken, refreshToken, profile, done) => {
-  try {
-    let user = await prisma.user.findUnique({
-      where: { email: profile.emails[0].value },
-    });
+passport.use(
+  new GoogleStrategy(
+    {
+      clientID: process.env.GOOGLE_CLIENT_ID,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+      callbackURL: `${process.env.APP_BASE_URL}/api/auth/google/callback`,
+    },
+    async (accessToken, refreshToken, profile, done) => {
+      try {
+        let user = await prisma.user.findUnique({
+          where: { email: profile.emails[0].value },
+        });
 
-    if (!user) {
-      user = await prisma.user.create({
-        data: {
-          fullName: profile.displayName,
-          email: profile.emails[0].value,
-          role: "STUDENT",  // Default role for Google login
-          authProvider: "google",
-        },
-      });
+        if (!user) {
+          user = await prisma.user.create({
+            data: {
+              fullName: profile.displayName,
+              email: profile.emails[0].value,
+              role: "STUDENT", // Default role for Google login
+              authProvider: "google",
+            },
+          });
+        }
+
+        return done(null, user); // The user object is passed to the session
+      } catch (error) {
+        return done(error, null);
+      }
     }
-
-    return done(null, user);  // The user object is passed to the session
-  } catch (error) {
-    return done(error, null);
-  }
-}));
+  )
+);
 
 // Google OAuth login route
-router.get("/google", passport.authenticate("google", {
-  scope: ["profile", "email"],
-}));
+router.get(
+  "/google",
+  passport.authenticate("google", {
+    scope: ["profile", "email"],
+  })
+);
 
 // Google OAuth callback route
-router.get("/google/callback",
+router.get(
+  "/google/callback",
   passport.authenticate("google", { failureRedirect: "/login" }),
   (req, res) => {
     const token = jwt.sign(
@@ -91,10 +99,8 @@ router.get("/google/callback",
   }
 );
 
-
 const normalizeEmail = (e) =>
-  (typeof e === "string" ? e.trim().toLowerCase() : e);
-
+  typeof e === "string" ? e.trim().toLowerCase() : e;
 
 const handleValidationErrors = (req, res, next) => {
   const errors = validationResult(req);
@@ -103,7 +109,6 @@ const handleValidationErrors = (req, res, next) => {
   }
   next();
 };
-
 
 const signToken = (user) =>
   jwt.sign(
@@ -117,15 +122,17 @@ const signToken = (user) =>
   );
 
 // Authorization middleware to restrict access by roles
-const authorize = (...roles) => (req, res, next) => {
-  if (!req.user)
-    return res.status(401).json({ success: false, message: "Unauthorized" });
+const authorize =
+  (...roles) =>
+  (req, res, next) => {
+    if (!req.user)
+      return res.status(401).json({ success: false, message: "Unauthorized" });
 
-  const role = String(req.user.role || "").toUpperCase();
-  if (!roles.map((r) => r.toUpperCase()).includes(role))
-    return res.status(403).json({ success: false, message: "Forbidden" });
-  next();
-};
+    const role = String(req.user.role || "").toUpperCase();
+    if (!roles.map((r) => r.toUpperCase()).includes(role))
+      return res.status(403).json({ success: false, message: "Forbidden" });
+    next();
+  };
 
 // Optional session-based protect route for authenticated users
 const optionalProtect = async (req, _res, next) => {
@@ -187,10 +194,11 @@ router.get("/signup/departments-catalog", async (_req, res) => {
   return res.json({ success: true, data: { items } });
 });
 
-router.post("/registrations",
+router.post(
+  "/registrations",
   [
     protect,
-    authorize("SUPER_ADMIN"),
+    authorize("SUPERADMIN"),
     body("fullName").exists().trim().isLength({ min: 2, max: 150 }),
     body("email").exists().isEmail(),
     body("role").exists().isString(),
@@ -211,10 +219,12 @@ router.post("/registrations",
         throw new Error("role must be STUDENT | INSTRUCTOR | ADMIN");
       }
       if (roleUpper === "STUDENT") {
-        if (!req.body.departmentId) throw new Error("departmentId is required for STUDENT");
+        if (!req.body.departmentId)
+          throw new Error("departmentId is required for STUDENT");
         if (!req.body.year) throw new Error("year is required for STUDENT");
         if (!req.body.branch) throw new Error("branch is required for STUDENT");
-        if (!req.body.academicYear) throw new Error("academicYear is required for STUDENT");
+        if (!req.body.academicYear)
+          throw new Error("academicYear is required for STUDENT");
       }
       return true;
     }),
@@ -233,14 +243,16 @@ router.post("/registrations",
         // ✅ Only persist these for STUDENT; otherwise store safe empties
         year: roleUpper === "STUDENT" ? String(req.body.year) : "",
         branch: roleUpper === "STUDENT" ? String(req.body.branch) : "",
-        academicYear: roleUpper === "STUDENT" ? String(req.body.academicYear) : "",
+        academicYear:
+          roleUpper === "STUDENT" ? String(req.body.academicYear) : "",
         rollNumber:
           roleUpper === "STUDENT" && req.body.rollNumber
             ? String(req.body.rollNumber)
             : null,
 
         // departmentId required only for STUDENT
-        departmentId: roleUpper === "STUDENT" ? String(req.body.departmentId) : null,
+        departmentId:
+          roleUpper === "STUDENT" ? String(req.body.departmentId) : null,
 
         status: "PENDING",
       };
@@ -250,7 +262,9 @@ router.post("/registrations",
         where: { id: data.collegeId },
       });
       if (!college)
-        return res.status(404).json({ success: false, message: "College not found" });
+        return res
+          .status(404)
+          .json({ success: false, message: "College not found" });
 
       // For STUDENT: ensure department belongs to this college
       if (roleUpper === "STUDENT") {
@@ -286,7 +300,8 @@ router.post("/registrations",
       if (err.code === "P2002")
         return res.status(400).json({
           success: false,
-          message: "Registration exists for this email or (college, rollNumber)",
+          message:
+            "Registration exists for this email or (college, rollNumber)",
         });
       next(err);
     }
@@ -294,7 +309,7 @@ router.post("/registrations",
 );
 
 router.post("/registrations/bulk",
-  [protect, authorize("SUPER_ADMIN"), upload.single("file")],
+  [protect, authorize("SUPERADMIN"), upload.single("file")],
   async (req, res) => {
     try {
       if (!req.file)
@@ -325,7 +340,9 @@ router.post("/registrations/bulk",
           String(pick(r, ["email", "e-mail", "mail"])).trim()
         );
         const roleUpper =
-          String(pick(r, ["role"])).trim().toUpperCase() || "STUDENT";
+          String(pick(r, ["role"]))
+            .trim()
+            .toUpperCase() || "STUDENT";
         const year = String(pick(r, ["year"])).trim();
         const branch = String(pick(r, ["branch"])).trim();
         const collegeId = String(pick(r, ["collegeId", "college id"])).trim();
@@ -364,7 +381,9 @@ router.post("/registrations/bulk",
               where: { id: departmentId },
             });
             if (!dept || dept.collegeId !== collegeId)
-              throw new Error("departmentId must belong to the selected college");
+              throw new Error(
+                "departmentId must belong to the selected college"
+              );
           }
 
           await prisma.registration.create({
@@ -425,12 +444,16 @@ router.post("/registrations/bulk",
     } catch (err) {
       res
         .status(500)
-        .json({ success: false, message: err?.message || "Bulk registration failed" });
+        .json({
+          success: false,
+          message: err?.message || "Bulk registration failed",
+        });
     }
   }
 );
 
-router.post("/signup/begin",
+router.post(
+  "/signup/begin",
   [body("email").exists().isEmail(), handleValidationErrors],
   async (req, res) => {
     const email = normalizeEmail(req.body.email);
@@ -438,7 +461,10 @@ router.post("/signup/begin",
     if (!reg || !["PENDING", "VERIFIED"].includes(reg.status)) {
       return res
         .status(404)
-        .json({ success: false, message: "Registration not found or already completed" });
+        .json({
+          success: false,
+          message: "Registration not found or already completed",
+        });
     }
 
     const otp = genOtp();
@@ -468,8 +494,7 @@ router.post("/signup/begin",
 );
 
 /** STEP 2: Verify – return short-lived signup token (NOT app token) */
-router.post(
-  "/signup/verify",
+router.post( "/signup/verify",
   [
     body("email").exists().isEmail(),
     body("otp").exists().isLength({ min: 6, max: 6 }),
@@ -509,7 +534,7 @@ router.post(
       where: { id: reg.id },
       data: {
         status: "VERIFIED",
-        otpHash: null,          // cannot reuse the OTP
+        otpHash: null, // cannot reuse the OTP
         otpExpires: completeBy, // repurpose as "complete-by" deadline
       },
     });
@@ -535,7 +560,6 @@ router.post(
   }
 );
 
-
 /** STEP 3: Complete – create User; Admin/Instructor may pick departmentKeys (from catalog) */
 router.post("/signup/complete",
   [
@@ -545,21 +569,27 @@ router.post("/signup/complete",
     body("year").optional().isString().isLength({ max: 10 }),
     body("branch").optional().isString().isLength({ max: 100 }),
     body("mobile").optional().isString().isLength({ max: 20 }),
-    // ignore any extra fields from the client
+    body("rollNumber").optional().isString().isLength({ max: 100 }), // For students
     handleValidationErrors,
   ],
   async (req, res) => {
     try {
       const normEmail = normalizeEmail(req.body.email);
-      const { password, fullName, year, branch, mobile } = req.body;
+      const { password, fullName, year, branch, mobile, rollNumber } = req.body;
 
       // 1) Ensure there is a verified registration session still valid
-      const reg = await prisma.registration.findUnique({ where: { email: normEmail } });
+      const reg = await prisma.registration.findUnique({
+        where: { email: normEmail },
+      });
       if (!reg) {
-        return res.status(404).json({ success: false, message: "Registration not found" });
+        return res
+          .status(404)
+          .json({ success: false, message: "Registration not found" });
       }
       if (reg.status !== "VERIFIED") {
-        return res.status(400).json({ success: false, message: "Please verify OTP first" });
+        return res
+          .status(400)
+          .json({ success: false, message: "Please verify OTP first" });
       }
       if (!reg.otpExpires || reg.otpExpires < new Date()) {
         return res.status(400).json({
@@ -569,18 +599,25 @@ router.post("/signup/complete",
       }
 
       // 2) Prevent duplicates
-      const exists = await prisma.user.findUnique({ where: { email: normEmail } });
+      const exists = await prisma.user.findUnique({
+        where: { email: normEmail },
+      });
       if (exists) {
-        return res.status(409).json({ success: false, message: "User already exists with this email" });
+        return res
+          .status(409)
+          .json({
+            success: false,
+            message: "User already exists with this email",
+          });
       }
 
-      // 3) Hash password (if you ever support SSO, allow empty password for non-credentials)
+      // 3) Hash password
       const hash = await bcrypt.hash(String(password), 10);
 
-      // 4) Role is server-decided (from registration), never from client
+      // 4) Role is determined by registration data
       const role = String(reg.role || "student").toLowerCase();
 
-      // 5) Build a safe insert payload
+      // 5) Build user data
       const userData = {
         email: normEmail,
         password: hash,
@@ -593,20 +630,10 @@ router.post("/signup/complete",
         year: year ?? null,
         branch: branch ?? null,
         mobile: mobile ?? null,
+        rollNumber: rollNumber ?? null,
         mustChangePassword: false,
-        // permissions come from your registration flow (if any)
         permissions: {},
       };
-
-      // If you keep the admin/instructor department selection via catalog, reuse your earlier logic here
-      if (["admin", "instructor"].includes(role)) {
-        // Option A: if you already stored this in registration, pull it from there
-        // Option B: accept a vetted list from body (not shown here)
-        userData.permissions = {
-          collegeId: reg.collegeId ?? null,
-          departmentIds: reg.departmentIds ?? [], // if you stored them during verify step or earlier
-        };
-      }
 
       // 6) Create user + mark registration completed (transactional)
       const result = await prisma.$transaction(async (tx) => {
@@ -638,21 +665,26 @@ router.post("/signup/complete",
       });
     } catch (err) {
       if (err?.code === "P2002") {
-        return res.status(400).json({ success: false, message: "Email already in use" });
+        return res
+          .status(400)
+          .json({ success: false, message: "Email already in use" });
       }
-      return res.status(500).json({ success: false, message: err?.message || "Signup failed" });
+      return res
+        .status(500)
+        .json({ success: false, message: err?.message || "Signup failed" });
     }
   }
 );
 
-router.post( "/register-user",
+router.post(
+  "/register-user",
   [
     optionalProtect,
     body("fullName").exists().trim().isLength({ min: 2, max: 100 }),
     body("email").exists().isEmail(),
     body("role").exists().isString(),
-    body("authProvider").optional().isString(), 
-    body("password").optional().isLength({ min: 6 }), 
+    body("authProvider").optional().isString(),
+    body("password").optional().isLength({ min: 6 }),
     body("year").optional().isString(),
     body("branch").optional().isString(),
     body("mobile").optional().isString(),
@@ -661,19 +693,16 @@ router.post( "/register-user",
   async (req, res, next) => {
     try {
       const fullName = String(req.body.fullName).trim();
-      const email = (req.body.email || "").trim().toLowerCase();
+      const email = String(req.body.email || "").trim().toLowerCase();
       const roleLower = String(req.body.role).trim().toLowerCase();
-      const authProvider = String(req.body.authProvider || "credentials")
-        .trim()
-        .toLowerCase();
+      const authProvider = String(req.body.authProvider || "credentials").trim().toLowerCase();
       const password = req.body.password;
 
-      // ONLY super_admin allowed here
-      if (roleLower !== "super_admin") {
+      if (roleLower !== "superadmin") {
         return res.status(400).json({
           success: false,
           message:
-            "Only SUPER_ADMIN can be created directly. Use /api/auth/registrations + OTP for student/instructor/admin.",
+            "Only SUPERADMIN can be created directly. Use /api/auth/registrations + OTP for other roles.",
         });
       }
       if (authProvider === "credentials" && !password) {
@@ -683,29 +712,40 @@ router.post( "/register-user",
         });
       }
 
-      const hasSuperAdmin =
-        (await prisma.user.count({ where: { role: "super_admin" } })) > 0;
+      // Count existing super admins
+      const saCount = await prisma.user.count({ where: { role: "superadmin" } });
 
-      if (hasSuperAdmin) {
-        // must be logged in as SUPER_ADMIN
-        if (!req.user)
-          return res
-            .status(401)
-            .json({ success: false, message: "Unauthorized" });
-        if (String(req.user.role).toLowerCase() !== "super_admin") {
-          return res.status(403).json({ success: false, message: "Forbidden" });
+      if (saCount > 0) {
+        // Identify the FIRST (root) super admin by earliest createdAt
+        const rootSA = await prisma.user.findFirst({
+          where: { role: "superadmin" },
+          orderBy: { createdAt: "asc" },
+          select: { id: true },
+        });
+
+        // Must be authenticated AND be the root SA
+        if (!req.user) {
+          return res.status(401).json({ success: false, message: "Unauthorized" });
         }
-      } else {
-        // Bootstrap mode: first user must be SUPER_ADMIN
-        // allowed without token; already enforced by roleLower !== "super_admin"
+        const isSuper = String(req.user.role || "").toLowerCase() === "superadmin";
+        const isRoot = String(req.user.id) === String(rootSA?.id);
+
+        if (!isSuper || !isRoot) {
+          return res.status(403).json({
+            success: false,
+            message: "Only the first SUPERADMIN can add another SUPERADMIN",
+          });
+        }
+      }
+      // else: bootstrap mode, allowed without token
+
+      // Email uniqueness
+      const exists = await prisma.user.findUnique({ where: { email } });
+      if (exists) {
+        return res.status(400).json({ success: false, message: "Email already in use" });
       }
 
-      const exists = await prisma.user.findUnique({ where: { email } });
-      if (exists)
-        return res
-          .status(400)
-          .json({ success: false, message: "Email already in use" });
-
+      // Hash password if credentials
       let hash = null;
       if (authProvider === "credentials") {
         hash = await bcrypt.hash(String(password), 10);
@@ -736,34 +776,20 @@ router.post( "/register-user",
         },
       });
 
-      // Welcome email for direct super_admin creation
-      try {
-        await sendEmail({
-          to: created.email,
-          subject: "Welcome! Your SUPER ADMIN account is ready",
-          text: `Hi ${created.fullName}, your SUPER ADMIN account is ready. Sign in at ${appBase}/login.`,
-          html: `<p>Hi ${created.fullName},</p>
-                 <p>Your <b>SUPER ADMIN</b> account is ready.</p>
-                 <p><a href="${appBase}/login">Sign in</a> with your password.</p>`,
-        });
-      } catch (e) {
-        console.warn("[register-user] welcome email failed:", e?.message || e);
-      }
-
       res.status(201).json({
         success: true,
         message: "User created. They must log in to receive a token.",
         data: { user: created },
       });
     } catch (err) {
-      if (err.code === "P2002")
-        return res
-          .status(400)
-          .json({ success: false, message: "Email already in use" });
+      if (err?.code === "P2002") {
+        return res.status(400).json({ success: false, message: "Email already in use" });
+      }
       next(err);
     }
   }
 );
+
 
 /* ----------------------------------- LOGIN ----------------------------------- */
 /** Password (credentials) login */
@@ -773,23 +799,36 @@ router.post("/login", async (req, res, next) => {
 
     // Validate input
     if (!email || !password) {
-      return res.status(400).json({ success: false, message: "Email and password are required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Email and password are required" });
     }
 
-    const user = await prisma.user.findUnique({ where: { email: normalizeEmail(email) } });
+    const user = await prisma.user.findUnique({
+      where: { email: normalizeEmail(email) },
+    });
     if (!user) {
-      return res.status(401).json({ success: false, message: "Invalid credentials" });
+      return res
+        .status(401)
+        .json({ success: false, message: "Invalid credentials" });
     }
 
     // Check if user uses credentials provider and has a password
     if (user.authProvider !== "credentials" || !user.password) {
-      return res.status(400).json({ success: false, message: "Use your configured provider to sign in" });
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "Use your configured provider to sign in",
+        });
     }
 
     // Verify password
     const passwordMatches = await bcrypt.compare(password, user.password);
     if (!passwordMatches) {
-      return res.status(401).json({ success: false, message: "Invalid credentials" });
+      return res
+        .status(401)
+        .json({ success: false, message: "Invalid credentials" });
     }
 
     // Update lastLogin timestamp
@@ -817,7 +856,6 @@ router.post("/login", async (req, res, next) => {
   }
 });
 
-
 router.post("/logout", protect, async (req, res) => {
   await prisma.user.update({
     where: { id: req.user.id },
@@ -826,7 +864,8 @@ router.post("/logout", protect, async (req, res) => {
   res.json({ success: true, message: "Logged out" });
 });
 /* --------------------- PASSWORD RESET via OTP (3-step) -------------------- */
-router.post("/password/forgot-otp",
+router.post(
+  "/password/forgot-otp",
   [body("email").exists().isEmail(), handleValidationErrors],
   async (req, res) => {
     const email = normalizeEmail(req.body.email);
@@ -873,7 +912,8 @@ router.post("/password/forgot-otp",
   }
 );
 
-router.post("/password/verify-otp",
+router.post(
+  "/password/verify-otp",
   [
     body("email").exists().isEmail(),
     body("otp").exists().isLength({ min: 6, max: 6 }),
@@ -932,7 +972,8 @@ router.post("/password/verify-otp",
   }
 );
 
-router.post( "/password/reset-with-token",
+router.post(
+  "/password/reset-with-token",
   [
     body("token").exists().isString(),
     body("newPassword").exists().isLength({ min: 6 }),
@@ -962,7 +1003,10 @@ router.post( "/password/reset-with-token",
           .json({ success: false, message: "Invalid token kind" });
 
       const user = await prisma.user.findUnique({ where: { id: decoded.sub } });
-      if (!user || normalizeEmail(user.email) !== normalizeEmail(decoded.email)) {
+      if (
+        !user ||
+        normalizeEmail(user.email) !== normalizeEmail(decoded.email)
+      ) {
         return res
           .status(400)
           .json({ success: false, message: "Invalid or expired token" });
@@ -974,7 +1018,10 @@ router.post( "/password/reset-with-token",
       if (!isCreds)
         return res
           .status(400)
-          .json({ success: false, message: "Use your SSO provider to sign in" });
+          .json({
+            success: false,
+            message: "Use your SSO provider to sign in",
+          });
 
       const hashed = await bcrypt.hash(String(newPassword), 10);
       await prisma.user.update({
@@ -1018,17 +1065,21 @@ router.get("/me", async (req, res, next) => {
         year: true,
         branch: true,
         mobile: true,
+         collegeId: true,
       },
     });
     if (!me)
-      return res.status(404).json({ success: false, message: "User not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "User not found" });
     res.status(200).json({ success: true, data: { user: me } });
   } catch (err) {
     next(err);
   }
 });
 
-router.put( "/me",
+router.put(
+  "/me",
   [
     body("fullName").optional().trim().isLength({ min: 2, max: 100 }),
     body("email").optional().isEmail(),
@@ -1037,9 +1088,13 @@ router.put( "/me",
     body("year").optional().isString(),
     body("branch").optional().isString(),
     body("mobile").optional().isString(),
+    body("collegeId").optional().isUUID(), // ✅ validation for collegeId
     body(["currentPassword", "newPassword"]).custom((_, { req }) => {
       const { currentPassword, newPassword } = req.body;
-      if ((currentPassword && !newPassword) || (!currentPassword && newPassword)) {
+      if (
+        (currentPassword && !newPassword) ||
+        (!currentPassword && newPassword)
+      ) {
         throw new Error(
           "Provide both currentPassword and newPassword to change password"
         );
@@ -1055,7 +1110,9 @@ router.put( "/me",
     try {
       const me = await prisma.user.findUnique({ where: { id: req.user.id } });
       if (!me)
-        return res.status(404).json({ success: false, message: "User not found" });
+        return res
+          .status(404)
+          .json({ success: false, message: "User not found" });
 
       const data = {};
       const {
@@ -1066,11 +1123,17 @@ router.put( "/me",
         year,
         branch,
         mobile,
+        collegeId,
       } = req.body;
 
-      if (typeof fullName === "string" && fullName.trim() && fullName !== me.fullName) {
+      if (
+        typeof fullName === "string" &&
+        fullName.trim() &&
+        fullName !== me.fullName
+      ) {
         data.fullName = fullName.trim();
       }
+
       if (email) {
         const normalized = normalizeEmail(email);
         const exists =
@@ -1106,6 +1169,11 @@ router.put( "/me",
       if (typeof branch !== "undefined") data.branch = branch || null;
       if (typeof mobile !== "undefined") data.mobile = mobile || null;
 
+      // ✅ Add support for collegeId
+      if (typeof collegeId !== "undefined") {
+        data.college = { connect: { id: collegeId } }; // assumes relation
+      }
+
       if (Object.keys(data).length === 0)
         return res
           .status(400)
@@ -1129,10 +1197,15 @@ router.put( "/me",
           year: true,
           branch: true,
           mobile: true,
+          college: { select: { id: true, name: true } }, // include college info
         },
       });
 
-      res.json({ success: true, message: "Profile updated", data: { user: updated } });
+      res.json({
+        success: true,
+        message: "Profile updated",
+        data: { user: updated },
+      });
     } catch (err) {
       if (err.code === "P2002")
         return res
@@ -1143,21 +1216,30 @@ router.put( "/me",
   }
 );
 
-router.delete("/me",
+
+router.delete(
+  "/me",
   [body("password").optional().isLength({ min: 6 }), handleValidationErrors],
   async (req, res, next) => {
     try {
       const me = await prisma.user.findUnique({ where: { id: req.user.id } });
       if (!me)
-        return res.status(404).json({ success: false, message: "User not found" });
+        return res
+          .status(404)
+          .json({ success: false, message: "User not found" });
 
       // If credentials user, require password
-      if (String(me.authProvider || "credentials").toLowerCase() === "credentials") {
+      if (
+        String(me.authProvider || "credentials").toLowerCase() === "credentials"
+      ) {
         const pwd = req.body.password;
         if (!pwd)
           return res
             .status(400)
-            .json({ success: false, message: "Password is required to delete your account" });
+            .json({
+              success: false,
+              message: "Password is required to delete your account",
+            });
         const ok = await bcrypt.compare(pwd, me.password || "");
         if (!ok)
           return res
@@ -1176,8 +1258,12 @@ router.delete("/me",
         });
 
       await prisma.$transaction(async (tx) => {
-        await tx.assessmentAttempt.deleteMany({ where: { studentId: req.user.id } });
-        await tx.chapterProgress.deleteMany({ where: { studentId: req.user.id } });
+        await tx.assessmentAttempt.deleteMany({
+          where: { studentId: req.user.id },
+        });
+        await tx.chapterProgress.deleteMany({
+          where: { studentId: req.user.id },
+        });
         await tx.courseReview.deleteMany({ where: { studentId: req.user.id } });
         await tx.enrollment.deleteMany({ where: { studentId: req.user.id } });
         await tx.user.delete({ where: { id: req.user.id } });

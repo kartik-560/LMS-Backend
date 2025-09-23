@@ -4,7 +4,7 @@ import { prisma } from "../config/prisma.js";
 const router = express.Router();
 
 /**
- * Middleware to check if user is ADMIN or SUPER_ADMIN
+ * Middleware to check if user is ADMIN or SUPERADMIN
  */
 function requireAdmin(req, res, next) {
   if (!req.user) {
@@ -13,7 +13,7 @@ function requireAdmin(req, res, next) {
 
   const role = String(req.user.role || "").toUpperCase();
 
-  if (role === "ADMIN" || role === "SUPER_ADMIN") {
+  if (role === "ADMIN" || role === "SUPERADMIN") {
     return next(); // ✅ allow access
   }
 
@@ -24,7 +24,8 @@ function requireAdmin(req, res, next) {
 router.get("/courses/:courseId/chapters", requireAdmin, async (req, res) => {
   const courseId = String(req.params.courseId);
 
-  const isSuperAdmin = String(req.user?.role || "").toUpperCase() === "SUPER_ADMIN";
+  const isSuperAdmin =
+    String(req.user?.role || "").toUpperCase() === "SUPERADMIN";
 
   const baseSelect = { id: true, title: true, order: true, isPublished: true };
   const superAdminSelect = { ...baseSelect, slug: true, isPreview: true };
@@ -62,7 +63,15 @@ router.get("/chapters/:id", requireAdmin, async (req, res) => {
 
 router.post("/courses/:courseId/chapters", requireAdmin, async (req, res) => {
   const { courseId } = req.params;
-  const { title, description, content, attachments, order, isPublished, isPreview } = req.body;
+  const {
+    title,
+    description,
+    content,
+    attachments,
+    order,
+    isPublished,
+    isPreview,
+  } = req.body;
 
   try {
     const created = await prisma.chapter.create({
@@ -84,7 +93,8 @@ router.post("/courses/:courseId/chapters", requireAdmin, async (req, res) => {
 });
 
 router.patch("/chapters/:id", requireAdmin, async (req, res) => {
-  const { title, content, attachments, order, isPublished, isPreview } = req.body;
+  const { title, content, attachments, order, isPublished, isPreview } =
+    req.body;
 
   try {
     const updated = await prisma.chapter.update({

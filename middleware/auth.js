@@ -11,18 +11,26 @@ export const norm = (s) =>
 
 
 const getToken = (req) => {
- 
   const auth = req.headers.authorization || "";
   if (auth.startsWith("Bearer ")) return auth.slice(7);
-
-
   if (req.cookies?.token) return req.cookies.token;
   if (req.cookies?.access_token) return req.cookies.access_token;
   if (req.cookies?.jwt) return req.cookies.jwt;
-
   if (req.query?.token) return String(req.query.token);
-
   return null;
+};
+
+const resolveCollegeIdFromPermissions = (perm) => {
+  if (!perm) return null;
+  try {
+    if (typeof perm === "string") perm = JSON.parse(perm);
+  } catch (_) {}
+  return (
+    perm?.collegeId ||
+    perm?.collegeID ||
+    perm?.college?.id ||
+    null
+  );
 };
 
 export async function protect(req, res, next) {
@@ -37,11 +45,9 @@ export async function protect(req, res, next) {
       return res.status(401).json({ error: "Unauthorized" });
     }
 
-    const userId =
-      decoded.id || decoded.userId || decoded.uid || decoded.sub || null;
+    const userId = decoded.id || decoded.userId || decoded.uid || decoded.sub || null;
     const userEmail = decoded.email || decoded.user?.email || null;
-    if (!userId && !userEmail)
-      return res.status(401).json({ error: "Unauthorized" });
+    if (!userId && !userEmail) return res.status(401).json({ error: "Unauthorized" });
 
     const where = userId ? { id: String(userId) } : { email: String(userEmail) };
 
@@ -59,32 +65,31 @@ export async function protect(req, res, next) {
         branch: true,
         mobile: true,
         mustChangePassword: true,
-        tokenVersion: true,                  // 👈 include this
+        tokenVersion: true,     // already used in your check
+        collegeId: true,        // 👈 fetch it directly
       },
     });
 
-    if (!user || !user.isActive)
-      return res.status(401).json({ error: "Unauthorized" });
+    if (!user || !user.isActive) return res.status(401).json({ error: "Unauthorized" });
 
-    // 👇 NEW: block tokens from older sessions
-    if (
-      typeof decoded.tokenVersion !== "number" ||
-      decoded.tokenVersion !== user.tokenVersion
-    ) {
-      return res
-        .status(401)
-        .json({ error: "SESSION_REVOKED" }); // frontend: clear auth + redirect
+    // Block old sessions
+    if (typeof decoded.tokenVersion !== "number" || decoded.tokenVersion !== user.tokenVersion) {
+      return res.status(401).json({ error: "SESSION_REVOKED" });
     }
 
     const rawRole = user.role || "";
     const role = norm(rawRole);
 
+    // Prefer DB column; if absent, fallback to permissions JSON
+    const effectiveCollegeId = user.collegeId || resolveCollegeIdFromPermissions(user.permissions);
+
     req.user = {
       ...user,
-      role,        // normalized
-      rawRole,     // original
+      role,             // normalized
+      rawRole,          // original
       isAdmin: role === "ADMIN" || role === "SUPER_ADMIN" || role === "SUPERADMIN",
       permissions: user.permissions || {},
+      collegeId: effectiveCollegeId || null,   // 👈 expose on req.user
     };
 
     next();

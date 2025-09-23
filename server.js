@@ -8,14 +8,11 @@ import { fileURLToPath } from "url";
 import serverless from "serverless-http";
 import "dotenv/config.js";
 import { testConnection } from "./config/prisma.js";
-import crypto from 'crypto';
 import { protect } from "./middleware/auth.js";
 import uploadsRouter from "./routes/upload.js";
 import authRouter from "./routes/auth.js";
-
+import signupRoutes from "./routes/signup.js";
 import superAdminRouter from "./routes/superadmin.js";
-import adminRouter from "./routes/admin.js";
-
 import chapterRouter from "./routes/chapter.js";
 import enrollmentsRouter from "./routes/enrollments.js";
 import assessmentsRouter from "./routes/assessments.js";
@@ -86,17 +83,15 @@ app.get("/health", (_req, res) => {
 // Routes
 app.use("/api/auth", authRouter);
 
-
 app.use("/api/colleges", collegesRouter);
-
 app.use("/api/superadmin", protect, superAdminRouter);
-app.use("/api/admin", protect, adminRouter);
 app.use("/api/uploads", express.static(path.resolve("uploads")));
 app.use("/api/uploads", uploadsRouter);
 app.use("/api", protect, chapterRouter);
 app.use("/api", protect, enrollmentsRouter);
 app.use("/api/assessments", protect, assessmentsRouter);
 app.use("/api/progress", progressRoutes);
+app.use("/api", signupRoutes);
 
 app.get("/diag/env", (_req, res) => {
   res.json({

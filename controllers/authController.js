@@ -7,8 +7,8 @@ import { sendEmail } from "../utils/sendEmail.js";
 
 /* ----------------------------- helpers ----------------------------- */
 
-const generateToken = (userId, role) => {
-  return jwt.sign({ userId, role }, process.env.JWT_SECRET, {
+const generateToken = (userId, role, collegeId = null) => {
+  return jwt.sign({ userId, role, collegeId }, process.env.JWT_SECRET, {
     expiresIn: process.env.JWT_EXPIRE || "7d",
   });
 };
@@ -45,7 +45,7 @@ const frontendBase = process.env.FRONTEND_URL || "http://localhost:3000";
 // POST /api/auth/register (Public) — bootstrap first SUPER_ADMIN
 const registerUser = async (req, res, next) => {
   try {
-    const { fullName, email, password, role = "student" } = req.body;
+    const { fullName, email, password, role = "student", collegeId } = req.body;
 
     if (!fullName) {
       return res
@@ -65,12 +65,10 @@ const registerUser = async (req, res, next) => {
       where: { email: normalizedEmail },
     });
     if (existing) {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message: "User with this email already exists",
-        });
+      return res.status(400).json({
+        success: false,
+        message: "User with this email already exists",
+      });
     }
 
     // BOOTSTRAP RULE:
@@ -113,6 +111,7 @@ const registerUser = async (req, res, next) => {
         emailVerificationToken: hashedToken,
         emailVerificationExpires: expires,
         isActive: true,
+        collegeId: collegeId || null,
       },
       select: {
         id: true,
@@ -122,6 +121,7 @@ const registerUser = async (req, res, next) => {
         isEmailVerified: true,
         isActive: true,
         createdAt: true,
+        collegeId: true,
       },
     });
 
@@ -144,7 +144,7 @@ const registerUser = async (req, res, next) => {
       `,
     });
 
-    const token = generateToken(user.id, user.role);
+    const token = generateToken(user.id, user.role, user.collegeId);
 
     res.status(201).json({
       success: true,
@@ -171,12 +171,10 @@ const loginUser = async (req, res, next) => {
         .json({ success: false, message: "Invalid credentials" });
     }
     if (!user.isActive) {
-      return res
-        .status(423)
-        .json({
-          success: false,
-          message: "Account is deactivated. Please contact support.",
-        });
+      return res.status(423).json({
+        success: false,
+        message: "Account is deactivated. Please contact support.",
+      });
     }
 
     const ok = await comparePassword(password, user.password);
@@ -191,7 +189,7 @@ const loginUser = async (req, res, next) => {
       data: { lastLogin: new Date() },
     });
 
-    const token = generateToken(user.id, user.role);
+    const token = generateToken(user.id, user.role, user.collegeId);
 
     res.status(200).json({
       success: true,
@@ -205,6 +203,7 @@ const loginUser = async (req, res, next) => {
           isEmailVerified: user.isEmailVerified,
           isActive: user.isActive,
           lastLogin: user.lastLogin,
+          collegeId: user.collegeId || null,
         },
         token,
       },

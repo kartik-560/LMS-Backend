@@ -6,35 +6,37 @@ import { protect } from "../middleware/auth.js";
 const router = express.Router();
 
 const normalizeEmail = (e) =>
-  (typeof e === "string" ? e.trim().toLowerCase() : e);
+  typeof e === "string" ? e.trim().toLowerCase() : e;
 
 const handleValidationErrors = (req, res, next) => {
   const errors = validationResult(req);
-  if (!errors.isEmpty()) 
+  if (!errors.isEmpty())
     return res.status(400).json({ success: false, errors: errors.array() });
   next();
 };
 
-const authorize = (...roles) => (req, res, next) => {
-  if (!req.user)
-    return res.status(401).json({ success: false, message: "Unauthorized" });
-  const role = String(req.user.role || "").toUpperCase();
-  if (!roles.map((r) => r.toUpperCase()).includes(role))
-    return res.status(403).json({ success: false, message: "Forbidden" });
-  next();
-};
+const authorize =
+  (...roles) =>
+  (req, res, next) => {
+    if (!req.user)
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    const role = String(req.user.role || "").toUpperCase();
+    if (!roles.map((r) => r.toUpperCase()).includes(role))
+      return res.status(403).json({ success: false, message: "Forbidden" });
+    next();
+  };
 
 const asIntOrNull = (v) => {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 };
 
-/** Create College (SUPER_ADMIN) */
+/** Create College (SUPERADMIN) */
 router.post(
   "/",
   [
     protect,
-    authorize("SUPER_ADMIN"),
+    authorize("SUPERADMIN"),
     body("name").exists().trim().isLength({ min: 2, max: 200 }),
     body("contactPerson").exists().trim().isLength({ min: 2, max: 150 }),
     body("mobileNumber").exists().trim().isLength({ min: 5, max: 20 }),
@@ -76,10 +78,10 @@ router.post(
   }
 );
 
-/** List Colleges (SUPER_ADMIN, simple search & pagination) */
-router.get("/", [protect, authorize("SUPER_ADMIN")], async (req, res, next) => {
+router.get("/", [protect, authorize("SUPERADMIN")], async (req, res, next) => {
   try {
     const { q, take = "50", skip = "0" } = req.query;
+
     const where = q
       ? {
           OR: [
@@ -91,43 +93,215 @@ router.get("/", [protect, authorize("SUPER_ADMIN")], async (req, res, next) => {
         }
       : {};
 
-    const [items, total] = await Promise.all([
+    const takeNum = Number(take) || 50;
+    const skipNum = Number(skip) || 0;
+
+    const [colleges, total] = await Promise.all([
       prisma.college.findMany({
         where,
         orderBy: { createdAt: "desc" },
-        take: Number(take) || 50,
-        skip: Number(skip) || 0,
+        take: takeNum,
+        skip: skipNum,
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          contactPerson: true,
+          mobileNumber: true,
+        },
       }),
       prisma.college.count({ where }),
     ]);
 
-    res.json({ success: true, data: { items, total} });
+    if (colleges.length === 0) {
+      return res.json({ success: true, data: { items: [], total } });
+    }
+
+    const collegeIds = colleges.map((c) => c.id);
+    const collegeIdSet = new Set(collegeIds);
+
+    // ---------- helpers ----------
+    const safeParse = (v) => {
+      if (typeof v === "string") {
+        try { return JSON.parse(v); } catch { return v; }
+      }
+      return v;
+    };
+
+    // Recursively search any nested object/array for a value equal to one of our collegeIds
+    const findCollegeIdInJson = (val) => {
+      val = safeParse(val);
+      if (!val) return null;
+
+      if (typeof val === "string") {
+        return collegeIdSet.has(val) ? val : null;
+      }
+      if (Array.isArray(val)) {
+        for (const x of val) {
+          const hit = findCollegeIdInJson(x);
+          if (hit) return hit;
+        }
+        return null;
+      }
+      if (typeof val === "object") {
+        // common shapes
+        if (val.collegeId && collegeIdSet.has(val.collegeId)) return val.collegeId;
+        if (val.collegeID && collegeIdSet.has(val.collegeID)) return val.collegeID;
+        if (val.college?.id && collegeIdSet.has(val.college.id)) return val.college.id;
+
+        for (const k of Object.keys(val)) {
+          const hit = findCollegeIdInJson(val[k]);
+          if (hit) return hit;
+        }
+      }
+      return null;
+    };
+
+    // ---------- users ----------
+    // Map users -> college via permissions JSON
+    const users = await prisma.user.findMany({
+      where: { role: { in: ["ADMIN", "INSTRUCTOR", "STUDENT"] } },
+      select: {
+        id: true,
+        role: true,
+        permissions: true,   // Json column (may be stringified/nested)
+      },
+    });
+
+    const instrCount = new Map(collegeIds.map((id) => [id, 0]));
+    const studAssignedCount = new Map(collegeIds.map((id) => [id, 0]));
+    const userCollegeId = new Map(); // userId -> resolved collegeId
+
+    for (const u of users) {
+      const cid = findCollegeIdInJson(u.permissions);
+      if (cid && collegeIdSet.has(cid)) {
+        userCollegeId.set(u.id, cid);
+        const role = String(u.role || "").toUpperCase();
+        if (role === "INSTRUCTOR") {
+          instrCount.set(cid, (instrCount.get(cid) || 0) + 1);
+        } else if (role === "STUDENT") {
+          studAssignedCount.set(cid, (studAssignedCount.get(cid) || 0) + 1);
+        }
+      }
+    }
+
+const sample = await prisma.user.findMany({
+  take: 5,
+  select: {
+    id: true,
+    role: true,
+    permissions: true,
+  },
+});
+console.log(JSON.stringify(sample, null, 2));
+
+
+    const courses = await prisma.course.findMany({
+      select: {
+        id: true,
+        title: true,
+        description: true,
+        thumbnail: true,
+        collegeId: true,
+        creatorId: true,
+      },
+    });
+
+    const coursesByCollege = new Map(collegeIds.map((id) => [id, []]));
+    const courseToCollege = new Map(); // courseId -> resolved collegeId
+
+    for (const c of courses) {
+      let cid = c.collegeId && collegeIdSet.has(c.collegeId) ? c.collegeId : null;
+
+      if (!cid && c.creatorId && userCollegeId.has(c.creatorId)) {
+        cid = userCollegeId.get(c.creatorId);
+      }
+
+      if (cid && coursesByCollege.has(cid)) {
+        coursesByCollege.get(cid).push({
+          id: c.id,
+          title: c.title,
+          description: c.description,
+          thumbnail: c.thumbnail,
+        });
+        courseToCollege.set(c.id, cid);
+      }
+    }
+
+    // ---------- enrollments ----------
+    // Distinct enrolled students per college (via courses we just attributed)
+    let enrollments = [];
+    const courseIdsWeAttributed = Array.from(courseToCollege.keys());
+    if (courseIdsWeAttributed.length > 0) {
+      enrollments = await prisma.enrollment.findMany({
+        where: { courseId: { in: courseIdsWeAttributed } },
+        select: { courseId: true, studentId: true },
+      });
+    }
+
+    const enrolledByCollege = new Map(collegeIds.map((id) => [id, new Set()]));
+    for (const e of enrollments) {
+      const cid = courseToCollege.get(e.courseId);
+      if (cid && enrolledByCollege.has(cid)) {
+        enrolledByCollege.get(cid).add(e.studentId);
+      }
+    }
+
+    // ---------- assemble payload ----------
+    const items = colleges.map((c) => {
+      const cCourses = coursesByCollege.get(c.id) || [];
+      const enrolledSet = enrolledByCollege.get(c.id) || new Set();
+
+      return {
+        id: c.id,
+        name: c.name,
+        email: c.email,
+        contactPerson: c.contactPerson,
+        mobileNumber: c.mobileNumber,
+
+        instructorCount: instrCount.get(c.id) || 0,          // from permissions.collegeId
+        studentCount: (studAssignedCount.get(c.id) || 0),     // assigned via permissions
+        enrolledStudents: enrolledSet.size,                   // distinct enrollments
+
+        managedCourseIds: cCourses.map((x) => x.id),
+        assignedCourses: cCourses.map((x) => x.title),
+
+        certificatesGenerated: 0, // TODO: wire to your real certificates source
+      };
+    });
+
+    res.json({ success: true, data: { items, total } });
   } catch (err) {
     next(err);
   }
 });
 
-/** Get one College (with departments) */
-router.get("/:id", [protect, authorize("SUPER_ADMIN")], async (req, res, next) => {
-  try {
-    const college = await prisma.college.findUnique({
-      where: { id: String(req.params.id) },
-      include: { departments: true },
-    });
-    if (!college)
-      return res.status(404).json({ success: false, message: "College not found" });
-    res.json({ success: true, data: { college } });
-  } catch (err) {
-    next(err);
+
+router.get("/:id",
+  [protect, authorize("SUPERADMIN")],
+  async (req, res, next) => {
+    try {
+      const college = await prisma.college.findUnique({
+        where: { id: String(req.params.id) },
+        include: { departments: true },
+      });
+      if (!college)
+        return res
+          .status(404)
+          .json({ success: false, message: "College not found" });
+      res.json({ success: true, data: { college } });
+    } catch (err) {
+      next(err);
+    }
   }
-});
+);
 
 /** Update College */
 router.put(
   "/:id",
   [
     protect,
-    authorize("SUPER_ADMIN"),
+    authorize("SUPERADMIN"),
     body("name").optional().trim().isLength({ min: 2, max: 200 }),
     body("contactPerson").optional().trim().isLength({ min: 2, max: 150 }),
     body("mobileNumber").optional().trim().isLength({ min: 5, max: 20 }),
@@ -167,7 +341,11 @@ router.put(
         data: update,
       });
 
-      res.json({ success: true, message: "College updated", data: { college } });
+      res.json({
+        success: true,
+        message: "College updated",
+        data: { college },
+      });
     } catch (err) {
       if (err.code === "P2025")
         return res
@@ -181,7 +359,7 @@ router.put(
 /** Delete College (cascade per schema) */
 router.delete(
   "/:id",
-  [protect, authorize("SUPER_ADMIN")],
+  [protect, authorize("SUPERADMIN")],
   async (req, res, next) => {
     try {
       await prisma.college.delete({ where: { id: String(req.params.id) } });
@@ -201,16 +379,20 @@ router.post(
   "/:collegeId/departments",
   [
     protect,
-    authorize("SUPER_ADMIN"),
+    authorize("SUPERADMIN"),
     body("name").exists().trim().isLength({ min: 2, max: 150 }),
     handleValidationErrors,
   ],
   async (req, res, next) => {
     try {
       const collegeId = String(req.params.collegeId);
-      const college = await prisma.college.findUnique({ where: { id: collegeId } });
+      const college = await prisma.college.findUnique({
+        where: { id: collegeId },
+      });
       if (!college)
-        return res.status(404).json({ success: false, message: "College not found" });
+        return res
+          .status(404)
+          .json({ success: false, message: "College not found" });
 
       // prevent obvious duplicates by name within a college
       const dup = await prisma.department.findFirst({
@@ -220,9 +402,10 @@ router.post(
         },
       });
       if (dup) {
-        return res
-          .status(400)
-          .json({ success: false, message: "Department already exists in this college" });
+        return res.status(400).json({
+          success: false,
+          message: "Department already exists in this college",
+        });
       }
 
       const created = await prisma.department.create({
@@ -239,13 +422,17 @@ router.post(
 /** List Departments for a College */
 router.get(
   "/:collegeId/departments",
-  [protect, authorize("SUPER_ADMIN")],
+  [protect, authorize("SUPERADMIN")],
   async (req, res, next) => {
     try {
       const collegeId = String(req.params.collegeId);
-      const college = await prisma.college.findUnique({ where: { id: collegeId } });
+      const college = await prisma.college.findUnique({
+        where: { id: collegeId },
+      });
       if (!college)
-        return res.status(404).json({ success: false, message: "College not found" });
+        return res
+          .status(404)
+          .json({ success: false, message: "College not found" });
 
       const departments = await prisma.department.findMany({
         where: { collegeId },
@@ -263,7 +450,7 @@ router.put(
   "/:collegeId/departments/:departmentId",
   [
     protect,
-    authorize("SUPER_ADMIN"),
+    authorize("SUPERADMIN"),
     body("name").optional().trim().isLength({ min: 2, max: 150 }),
     handleValidationErrors,
   ],
@@ -272,11 +459,14 @@ router.put(
       const collegeId = String(req.params.collegeId);
       const departmentId = String(req.params.departmentId);
 
-      const dept = await prisma.department.findUnique({ where: { id: departmentId } });
+      const dept = await prisma.department.findUnique({
+        where: { id: departmentId },
+      });
       if (!dept || dept.collegeId !== collegeId)
-        return res
-          .status(404)
-          .json({ success: false, message: "Department not found for this college" });
+        return res.status(404).json({
+          success: false,
+          message: "Department not found for this college",
+        });
 
       const update = {};
       if (typeof req.body.name === "string") update.name = req.body.name.trim();
@@ -308,17 +498,20 @@ router.put(
 /** Delete Department (ensuring it belongs to the college) */
 router.delete(
   "/:collegeId/departments/:departmentId",
-  [protect, authorize("SUPER_ADMIN")],
+  [protect, authorize("SUPERADMIN")],
   async (req, res, next) => {
     try {
       const collegeId = String(req.params.collegeId);
       const departmentId = String(req.params.departmentId);
 
-      const dept = await prisma.department.findUnique({ where: { id: departmentId } });
+      const dept = await prisma.department.findUnique({
+        where: { id: departmentId },
+      });
       if (!dept || dept.collegeId !== collegeId)
-        return res
-          .status(404)
-          .json({ success: false, message: "Department not found for this college" });
+        return res.status(404).json({
+          success: false,
+          message: "Department not found for this college",
+        });
 
       await prisma.department.delete({ where: { id: departmentId } });
       res.json({ success: true, message: "Department deleted" });
@@ -335,15 +528,13 @@ router.delete(
 /** department getting route fro the admin/college */
 router.get("/departments", protect, async (req, res) => {
   try {
-
     const setting = await prisma.setting.findUnique({
-      where: { key: "departments" }, 
+      where: { key: "departments" },
     });
 
     if (!setting) {
       return res.status(404).json({ error: "Departments setting not found" });
     }
-
 
     const departments = setting.value;
 

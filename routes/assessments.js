@@ -1,13 +1,12 @@
 import express from 'express';
 import { prisma } from '../config/prisma.js';
-import { protect, authorize } from '../middleware/auth.js'; // Assuming protect and authorize are used
+import { protect, authorize } from '../middleware/auth.js'; 
 const router = express.Router();
 
 const up = (s) => String(s || '').toUpperCase();
-const isAdmin = (req) => ['ADMIN', 'SUPERADMIN', 'SUPER_ADMIN'].includes(up(req.user?.role));
+const isAdmin = (req) => ['ADMIN', 'SUPERADMIN'].includes(up(req.user?.role));
 
-
-router.post('/chapters/:chapterId', authorize('ADMIN', 'SUPERADMIN', 'SUPER_ADMIN'), async (req, res) => {
+router.post('/chapters/:chapterId', authorize('ADMIN', 'SUPERADMIN'), async (req, res) => {
   try {
     const { chapterId } = req.params;
     const {
@@ -18,10 +17,9 @@ router.post('/chapters/:chapterId', authorize('ADMIN', 'SUPERADMIN', 'SUPER_ADMI
       maxAttempts = 1,
       isPublished = true,
       order = 1,
-      questions = [],  // List of questions for the assessment
+      questions = [],  
     } = req.body;
 
-    // Ensure chapter exists
     const chapter = await prisma.chapter.findUnique({
       where: { id: String(chapterId) },
       select: { id: true, courseId: true },
@@ -110,7 +108,6 @@ router.get('/', async (req, res) => {
   }
 });
 
-// Get a specific assessment by ID
 router.get('/:id', async (req, res) => {
   try {
     const a = await prisma.assessment.findUnique({
@@ -198,7 +195,6 @@ router.post('/:id/attempts', async (req, res) => {
   }
 });
 
-
 router.get('/dashboard', protect, async (req, res) => {
   try {
     const studentId = req.user.id;
@@ -251,6 +247,5 @@ router.get('/dashboard', protect, async (req, res) => {
     res.status(500).json({ error: 'Internal error' });
   }
 });
-
 
 export default router;
