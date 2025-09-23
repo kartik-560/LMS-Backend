@@ -34,31 +34,32 @@
   ],
   "author": "EduSphere Team",
   "license": "MIT",
-  "dependencies": {
-    "@prisma/client": "^5.7.1",
-    "bcryptjs": "^2.4.3",
-    "cloudinary": "^1.40.0",
-    "compression": "^1.7.4",
-    "cors": "^2.8.5",
-    "dotenv": "^16.3.1",
-    "express": "^4.21.2",
-    "express-rate-limit": "^6.10.0",
-    "express-session": "^1.18.2",
-    "express-validator": "^7.0.1",
-    "helmet": "^7.0.0",
-    "jsonwebtoken": "^9.0.2",
-    "morgan": "^1.10.0",
-    "multer": "^1.4.5-lts.1",
-    "nodemailer": "^6.9.4",
-    "passport": "^0.7.0",
-    "passport-google-oauth20": "^2.0.0",
-    "serverless-http": "^4.0.0",
-    "xlsx": "^0.18.5"
-  },
-  "devDependencies": {
-    "jest": "^29.6.2",
-    "nodemon": "^3.0.1",
-    "prisma": "^5.7.1",
-    "supertest": "^6.3.3"
-  }
+"dependencies": {
+  "@prisma/client": "^5.7.1",
+  "prisma": "^5.7.1",   
+  "bcryptjs": "^2.4.3",
+  "cloudinary": "^1.40.0",
+  "compression": "^1.7.4",
+  "cors": "^2.8.5",
+  "dotenv": "^16.3.1",
+  "express": "^4.21.2",
+  "express-rate-limit": "^6.10.0",
+  "express-session": "^1.18.2",
+  "express-validator": "^7.0.1",
+  "helmet": "^7.0.0",
+  "jsonwebtoken": "^9.0.2",
+  "morgan": "^1.10.0",
+  "multer": "^1.4.5-lts.1",
+  "nodemailer": "^6.9.4",
+  "passport": "^0.7.0",
+  "passport-google-oauth20": "^2.0.0",
+  "serverless-http": "^4.0.0",
+  "xlsx": "^0.18.5"
+},
+"devDependencies": {
+  "jest": "^29.6.2",
+  "nodemon": "^3.0.1",
+  "supertest": "^6.3.3"
+}
+
 }
