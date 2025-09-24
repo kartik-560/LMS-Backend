@@ -31,6 +31,7 @@ const ALLOWED_ORIGINS = [
   "http://localhost:5173",
   "http://localhost:3000",
   "https://lms-vhfz.vercel.app",
+  "https://lms-1-psi.vercel.app"
 ];
 
 
@@ -130,7 +131,7 @@ app.use(async (_req, _res, next) => {
 
 const PORT = process.env.PORT || 5000;
 
-// Only run DB check and listen if not on Vercel (local/server mode)
+
 if (!process.env.VERCEL) {
   // Test DB connection at startup
   testConnection()
