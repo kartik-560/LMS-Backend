@@ -4,97 +4,76 @@ import { protect } from "../middleware/auth.js"; // Protect middleware to ensure
 
 const router = express.Router();
 
-
 router.post("/chapters/:chapterId/complete", protect, async (req, res) => {
   try {
     const studentId = req.user.id;
     const chapterId = String(req.params.chapterId);
 
-   
     const chapter = await prisma.chapter.findUnique({
       where: { id: chapterId },
       select: { id: true },
     });
-
     if (!chapter) return res.status(404).json({ error: "Chapter not found" });
 
     const now = new Date();
-  
+
     await prisma.chapterProgress.upsert({
-      where: { chapterId_studentId: { chapterId, studentId } },
+      where: { chapterId_studentId: { chapterId, studentId } }, // requires a UNIQUE composite index
       update: { isCompleted: true, completedAt: now },
-      create: {
-        chapterId,
-        studentId,
-        isCompleted: true,
-        completedAt: now,
-      },
+      create: { chapterId, studentId, isCompleted: true, completedAt: now },
     });
 
-    res.json({ ok: true });
+    // No-store to avoid any odd client caching loops
+    res.set("Cache-Control", "no-store");
+    return res.json({ ok: true });
   } catch (e) {
     console.error("complete chapter", e);
-    res.status(500).json({ error: "Internal error" });
+    return res.status(500).json({ error: "Internal error" });
   }
 });
 
-
 router.get("/course/:courseId/completed", protect, async (req, res) => {
-  const studentId = req.user.id;
-  const courseId = String(req.params.courseId);
-
   try {
+    const studentId = req.user.id;
+    const courseId = String(req.params.courseId);
+
     const rows = await prisma.chapterProgress.findMany({
-      where: {
-        studentId,
-        isCompleted: true,
-        chapter: { courseId },
-      },
+      where: { studentId, isCompleted: true, chapter: { courseId } },
       select: { chapterId: true },
     });
 
-    res.json({ data: rows.map(r => r.chapterId) });
+    res.set("Cache-Control", "no-store");
+    return res.json({ data: rows.map((r) => r.chapterId) });
   } catch (e) {
     console.error("Get completed chapters", e);
-    res.status(500).json({ error: "Internal error" });
+    return res.status(500).json({ error: "Internal error" });
   }
 });
-
 
 router.get("/course/:courseId/summary", protect, async (req, res) => {
   try {
     const studentId = req.user.id;
     const courseId = String(req.params.courseId);
 
-
     const [chaptersTotal, textChaptersTotal] = await Promise.all([
       prisma.chapter.count({ where: { courseId } }),
-      prisma.chapter.count({
-        where: {
-          courseId,
-          assessments: { none: {} }, 
-        },
-      }),
+      prisma.chapter.count({ where: { courseId, assessments: { none: {} } } }),
     ]);
 
     const [chaptersDone, textChaptersDone] = await Promise.all([
       prisma.chapterProgress.count({
-        where: {
-          studentId,
-          isCompleted: true,
-          chapter: { courseId },
-        },
+        where: { studentId, isCompleted: true, chapter: { courseId } },
       }),
       prisma.chapterProgress.count({
         where: {
           studentId,
           isCompleted: true,
-          chapter: { courseId, assessments: { none: {} } }, 
+          chapter: { courseId, assessments: { none: {} } },
         },
       }),
     ]);
 
-
+   
     const attempts = await prisma.assessmentAttempt.findMany({
       where: {
         studentId,
@@ -103,31 +82,32 @@ router.get("/course/:courseId/summary", protect, async (req, res) => {
         assessment: { courseId },
       },
       orderBy: { submittedAt: "desc" },
-      select: { assessmentId: true, score: true, maxScore: true },
+      select: { assessmentId: true, score: true,  },
     });
 
-   
     const seen = new Set();
     let sumPct = 0;
     let taken = 0;
     for (const a of attempts) {
       if (seen.has(a.assessmentId)) continue;
       seen.add(a.assessmentId);
-      if ((a.maxScore ?? 0) > 0) {
-        sumPct += (a.score / a.maxScore) * 100;
+     
+      const sc = Number(a.score ?? 0);
+      if (max > 0) {
+        sumPct += (sc / max) * 100;
         taken += 1;
       }
     }
     const averagePercent = taken ? Math.round(sumPct / taken) : 0;
 
-
     const timeAgg = await prisma.chapterProgress.aggregate({
       where: { studentId, chapter: { courseId } },
       _sum: { timeSpent: true },
     });
-    const totalTimeSpent = timeAgg._sum.timeSpent || 0;
+    const totalTimeSpent = Number(timeAgg._sum.timeSpent ?? 0);
 
-    res.json({
+    res.set("Cache-Control", "no-store");
+    return res.json({
       data: {
         chapters: { done: chaptersDone, total: chaptersTotal },
         modules: { done: textChaptersDone, total: textChaptersTotal },
@@ -137,7 +117,7 @@ router.get("/course/:courseId/summary", protect, async (req, res) => {
     });
   } catch (e) {
     console.error("progress summary", e);
-    res.status(500).json({ error: "Internal error" });
+    return res.status(500).json({ error: "Internal error" });
   }
 });
 

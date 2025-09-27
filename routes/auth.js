@@ -194,119 +194,116 @@ router.get("/signup/departments-catalog", async (_req, res) => {
   return res.json({ success: true, data: { items } });
 });
 
-router.post(
-  "/registrations",
-  [
-    protect,
-    authorize("SUPERADMIN"),
-    body("fullName").exists().trim().isLength({ min: 2, max: 150 }),
-    body("email").exists().isEmail(),
-    body("role").exists().isString(),
+  router.post("/registrations",
+    [
+      protect,
+      authorize("SUPERADMIN"),
+      body("fullName").exists().trim().isLength({ min: 2, max: 150 }),
+      body("email").exists().isEmail(),
+      body("role").exists().isString(),
+      body("year").optional().isString(),
+      body("branch").optional().isString(),
+      body("academicYear").optional().isString(),
+      body("rollNumber").optional().isString(),
 
-    // ✅ Optional for ADMIN/INSTRUCTOR; required for STUDENT via custom check below
-    body("year").optional().isString(),
-    body("branch").optional().isString(),
-    body("academicYear").optional().isString(),
-    body("rollNumber").optional().isString(),
+      // departmentId is only required for STUDENT
+      body("collegeId").exists().isString(),
+      body("departmentId").optional().isString(),
 
-    // departmentId is only required for STUDENT
-    body("collegeId").exists().isString(),
-    body("departmentId").optional().isString(),
+      body("role").custom((value, { req }) => {
+        const roleUpper = String(value || "").toUpperCase();
+        if (!["STUDENT", "INSTRUCTOR", "ADMIN"].includes(roleUpper)) {
+          throw new Error("role must be STUDENT | INSTRUCTOR | ADMIN");
+        }
+        if (roleUpper === "STUDENT") {
+          if (!req.body.departmentId)
+            throw new Error("departmentId is required for STUDENT");
+          if (!req.body.year) throw new Error("year is required for STUDENT");
+          if (!req.body.branch) throw new Error("branch is required for STUDENT");
+          if (!req.body.academicYear)
+            throw new Error("academicYear is required for STUDENT");
+        }
+        return true;
+      }),
+      handleValidationErrors,
+    ],
+    async (req, res, next) => {
+      try {
+        const roleUpper = String(req.body.role).trim().toUpperCase();
 
-    body("role").custom((value, { req }) => {
-      const roleUpper = String(value || "").toUpperCase();
-      if (!["STUDENT", "INSTRUCTOR", "ADMIN"].includes(roleUpper)) {
-        throw new Error("role must be STUDENT | INSTRUCTOR | ADMIN");
-      }
-      if (roleUpper === "STUDENT") {
-        if (!req.body.departmentId)
-          throw new Error("departmentId is required for STUDENT");
-        if (!req.body.year) throw new Error("year is required for STUDENT");
-        if (!req.body.branch) throw new Error("branch is required for STUDENT");
-        if (!req.body.academicYear)
-          throw new Error("academicYear is required for STUDENT");
-      }
-      return true;
-    }),
-    handleValidationErrors,
-  ],
-  async (req, res, next) => {
-    try {
-      const roleUpper = String(req.body.role).trim().toUpperCase();
+        const data = {
+          fullName: String(req.body.fullName).trim(),
+          email: normalizeEmail(req.body.email),
+          role: roleUpper, // Registration stores uppercase roles
+          collegeId: req.body.collegeId,
 
-      const data = {
-        fullName: String(req.body.fullName).trim(),
-        email: normalizeEmail(req.body.email),
-        role: roleUpper, // Registration stores uppercase roles
-        collegeId: req.body.collegeId,
+          // ✅ Only persist these for STUDENT; otherwise store safe empties
+          year: roleUpper === "STUDENT" ? String(req.body.year) : "",
+          branch: roleUpper === "STUDENT" ? String(req.body.branch) : "",
+          academicYear:
+            roleUpper === "STUDENT" ? String(req.body.academicYear) : "",
+          rollNumber:
+            roleUpper === "STUDENT" && req.body.rollNumber
+              ? String(req.body.rollNumber)
+              : null,
 
-        // ✅ Only persist these for STUDENT; otherwise store safe empties
-        year: roleUpper === "STUDENT" ? String(req.body.year) : "",
-        branch: roleUpper === "STUDENT" ? String(req.body.branch) : "",
-        academicYear:
-          roleUpper === "STUDENT" ? String(req.body.academicYear) : "",
-        rollNumber:
-          roleUpper === "STUDENT" && req.body.rollNumber
-            ? String(req.body.rollNumber)
-            : null,
+          // departmentId required only for STUDENT
+          departmentId:
+            roleUpper === "STUDENT" ? String(req.body.departmentId) : null,
 
-        // departmentId required only for STUDENT
-        departmentId:
-          roleUpper === "STUDENT" ? String(req.body.departmentId) : null,
+          status: "PENDING",
+        };
 
-        status: "PENDING",
-      };
-
-      // Validate college
-      const college = await prisma.college.findUnique({
-        where: { id: data.collegeId },
-      });
-      if (!college)
-        return res
-          .status(404)
-          .json({ success: false, message: "College not found" });
-
-      // For STUDENT: ensure department belongs to this college
-      if (roleUpper === "STUDENT") {
-        const dept = await prisma.department.findUnique({
-          where: { id: String(req.body.departmentId) },
+        // Validate college
+        const college = await prisma.college.findUnique({
+          where: { id: data.collegeId },
         });
-        if (!dept || dept.collegeId !== data.collegeId) {
+        if (!college)
+          return res
+            .status(404)
+            .json({ success: false, message: "College not found" });
+
+        // For STUDENT: ensure department belongs to this college
+        if (roleUpper === "STUDENT") {
+          const dept = await prisma.department.findUnique({
+            where: { id: String(req.body.departmentId) },
+          });
+          if (!dept || dept.collegeId !== data.collegeId) {
+            return res.status(400).json({
+              success: false,
+              message: "departmentId must belong to the selected college",
+            });
+          }
+        }
+
+        const created = await prisma.registration.create({ data });
+
+        // Welcome email prompting OTP signup
+        try {
+          await sendEmail({
+            to: data.email,
+            subject: "Welcome! Complete your account",
+            text: `Hi ${data.fullName}, you've been registered as ${data.role}. To activate your account, request an OTP at ${appBase}/signup.`,
+            html: `<p>Hi ${data.fullName},</p>
+                  <p>You’ve been registered as <b>${data.role}</b>.</p>
+                  <p><a href="${appBase}/signup">Click here</a> to request an OTP and complete your account.</p>`,
+          });
+        } catch (e) {
+          console.warn("[registrations] welcome email failed:", e?.message || e);
+        }
+
+        res.status(201).json({ success: true, data: { registration: created } });
+      } catch (err) {
+        if (err.code === "P2002")
           return res.status(400).json({
             success: false,
-            message: "departmentId must belong to the selected college",
+            message:
+              "Registration exists for this email or (college, rollNumber)",
           });
-        }
+        next(err);
       }
-
-      const created = await prisma.registration.create({ data });
-
-      // Welcome email prompting OTP signup
-      try {
-        await sendEmail({
-          to: data.email,
-          subject: "Welcome! Complete your account",
-          text: `Hi ${data.fullName}, you've been registered as ${data.role}. To activate your account, request an OTP at ${appBase}/signup.`,
-          html: `<p>Hi ${data.fullName},</p>
-                 <p>You’ve been registered as <b>${data.role}</b>.</p>
-                 <p><a href="${appBase}/signup">Click here</a> to request an OTP and complete your account.</p>`,
-        });
-      } catch (e) {
-        console.warn("[registrations] welcome email failed:", e?.message || e);
-      }
-
-      res.status(201).json({ success: true, data: { registration: created } });
-    } catch (err) {
-      if (err.code === "P2002")
-        return res.status(400).json({
-          success: false,
-          message:
-            "Registration exists for this email or (college, rollNumber)",
-        });
-      next(err);
     }
-  }
-);
+  );
 
 router.post("/registrations/bulk",
   [protect, authorize("SUPERADMIN"), upload.single("file")],
@@ -452,8 +449,7 @@ router.post("/registrations/bulk",
   }
 );
 
-router.post(
-  "/signup/begin",
+router.post("/signup/begin",
   [body("email").exists().isEmail(), handleValidationErrors],
   async (req, res) => {
     const email = normalizeEmail(req.body.email);
@@ -493,7 +489,7 @@ router.post(
   }
 );
 
-/** STEP 2: Verify – return short-lived signup token (NOT app token) */
+
 router.post( "/signup/verify",
   [
     body("email").exists().isEmail(),
@@ -560,7 +556,7 @@ router.post( "/signup/verify",
   }
 );
 
-/** STEP 3: Complete – create User; Admin/Instructor may pick departmentKeys (from catalog) */
+
 router.post("/signup/complete",
   [
     body("email").exists().isEmail(),
@@ -790,9 +786,6 @@ router.post(
   }
 );
 
-
-/* ----------------------------------- LOGIN ----------------------------------- */
-/** Password (credentials) login */
 router.post("/login", async (req, res, next) => {
   try {
     const { email, password } = req.body;
@@ -813,7 +806,6 @@ router.post("/login", async (req, res, next) => {
         .json({ success: false, message: "Invalid credentials" });
     }
 
-    // Check if user uses credentials provider and has a password
     if (user.authProvider !== "credentials" || !user.password) {
       return res
         .status(400)
@@ -831,14 +823,13 @@ router.post("/login", async (req, res, next) => {
         .json({ success: false, message: "Invalid credentials" });
     }
 
-    // Update lastLogin timestamp
     await prisma.user.update({
       where: { id: user.id },
       data: { lastLogin: new Date() },
     });
 
-    // Generate token
-    const token = signToken(user); // Ensure your `signToken()` function signs a JWT with a secret
+
+    const token = signToken(user); 
 
     const payload = {
       id: user.id,
@@ -1215,7 +1206,6 @@ router.put(
     }
   }
 );
-
 
 router.delete(
   "/me",

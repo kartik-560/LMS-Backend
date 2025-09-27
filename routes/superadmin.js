@@ -100,6 +100,73 @@ function requireSuperAdmin(req, res, next) {
   next();
 }
 
+const baseSelect = {
+  id: true,
+  title: true,
+  thumbnail: true,
+  status: true,
+  creatorId: true,
+  category: true,
+  description: true,
+  createdAt: true,
+  updatedAt: true,
+};
+
+// --- Shared handler ---
+async function courseDetailHandler(req, res) {
+  try {
+    if (!req.user) return res.status(401).json({ error: "Unauthorized" });
+
+    const role = String(req.user.role || "").toUpperCase();
+    const id = String(req.params.id);
+    const collegeIdRaw = req.query.collegeId ?? req.user.collegeId ?? null;
+    const collegeId = collegeIdRaw ? String(collegeIdRaw) : null;
+
+    if (role === "SUPERADMIN") {
+      const course = await prisma.course.findUnique({
+        where: { id },
+        select: baseSelect,
+      });
+      if (!course) return res.status(404).json({ error: "Not found" });
+      return res.json(course);
+    }
+
+    if (!collegeId) {
+      return res
+        .status(400)
+        .json({ error: "collegeId is required for this role" });
+    }
+
+    if (role === "STUDENT") {
+      const sid = String(req.user.id);
+      const course = await prisma.course.findFirst({
+        where: {
+          id,
+          AND: [
+            { enrollments: { some: { studentId: sid /*, status: "APPROVED" */ } } },
+            { CoursesAssigned: { some: { collegeId } } }, // remove if "enrolled trumps assignment"
+          ],
+        },
+        select: baseSelect,
+      });
+      if (!course) return res.status(404).json({ error: "Not found" });
+      return res.json(course);
+    }
+
+    // ADMIN / INSTRUCTOR
+    const course = await prisma.course.findFirst({
+      where: { id, CoursesAssigned: { some: { collegeId } } },
+      select: baseSelect,
+    });
+    if (!course) return res.status(404).json({ error: "Not found" });
+    return res.json(course);
+  } catch (err) {
+    console.error("GET course detail error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+}
+
+
 // --- overview (SUPERADMIN only) ---
 router.get("/overview", requireSuperAdmin, async (_req, res) => {
   const [users, totalCourses] = await Promise.all([
@@ -208,38 +275,85 @@ router.get(
 );
 
 // ---------- Instructors ----------
-router.get(
-  "/instructors",
+// router.get("/instructors",
+//   requireAnyRole("SUPERADMIN", "ADMIN"),
+//   async (req, res, next) => {
+//     try {
+//       const all = await fetchAllUsersMinimal();
+
+//       let list = all.filter(
+//         (u) =>
+//           String(u.role || "")
+//             .trim()
+//             .toLowerCase() === "instructor"
+//       );
+
+//       if (!isSuperAdmin(req.user)) {
+//         const cid = effectiveCollegeId(req.user);
+//         if (cid) {
+//           list = list.filter(
+//             (u) => u.collegeId === cid || u?.permissions?.collegeId === cid
+//           );
+//         }
+//       }
+
+//       console.log(
+//         "[instructors] count:",
+//         list.length,
+//         "req.user.role:",
+//         req?.user?.role,
+//         "cid:",
+//         effectiveCollegeId(req.user)
+//       );
+//       return res.json(list.map(toUserPayload));
+//     } catch (err) {
+//       return next(err);
+//     }
+//   }
+// );
+
+router.get("/instructors",
   requireAnyRole("SUPERADMIN", "ADMIN"),
   async (req, res, next) => {
     try {
-      const all = await fetchAllUsersMinimal();
+      const isSA = isSuperAdmin(req.user);
+      const cid = effectiveCollegeId(req.user);
 
-      let list = all.filter(
-        (u) =>
-          String(u.role || "")
-            .trim()
-            .toLowerCase() === "instructor"
-      );
+      const where = {
+        role: "INSTRUCTOR",
+        ...(isSA ? {} : { collegeId: cid }),
+      };
 
-      if (!isSuperAdmin(req.user)) {
-        const cid = effectiveCollegeId(req.user);
-        if (cid) {
-          list = list.filter(
-            (u) => u.collegeId === cid || u?.permissions?.collegeId === cid
-          );
-        }
-      }
+      const instructors = await prisma.user.findMany({
+        where,
+        select: {
+          id: true,
+          fullName: true,
+          email: true,
+          role: true,
+          collegeId: true,
+        },
+      });
+
+      const payload = instructors.map((u) => ({
+        id: u.id,
+        name: u.fullName,
+        email: u.email,
+        role: u.role,
+        collegeId: String(u.collegeId || ""),
+
+        assignedCourses: [],
+      }));
 
       console.log(
         "[instructors] count:",
-        list.length,
+        payload.length,
         "req.user.role:",
         req?.user?.role,
         "cid:",
-        effectiveCollegeId(req.user)
+        cid
       );
-      return res.json(list.map(toUserPayload));
+      return res.json(payload);
     } catch (err) {
       return next(err);
     }
@@ -366,48 +480,58 @@ router.get("/courses", async (req, res) => {
     const ps = Math.min(Math.max(parseInt(String(pageSize), 10) || 20, 1), 100);
 
     const baseSelect = {
-      id: true, title: true, thumbnail: true, status: true,
-      creatorId: true, category: true, description: true,
-      createdAt: true, updatedAt: true,
+      id: true,
+      title: true,
+      thumbnail: true,
+      status: true,
+      creatorId: true,
+      category: true,
+      description: true,
+      createdAt: true,
+      updatedAt: true,
     };
 
     const commonFilter = {
       AND: [
-        search ? { title: { contains: String(search), mode: "insensitive" } } : {},
+        search
+          ? { title: { contains: String(search), mode: "insensitive" } }
+          : {},
         status ? { status: String(status) } : {},
         category ? { category: String(category) } : {},
       ],
     };
+    console.log("Role", role);
 
     // ---------- SUPERADMIN: see all courses; can optionally filter by collegeId ----------
     if (role === "SUPERADMIN") {
-      const where = {
-        ...commonFilter,
-        ...(collegeId ? { CoursesAssigned: { some: { collegeId: String(collegeId) } } } : {}),
-      };
+      const where = { ...commonFilter }; // <-- no CoursesAssigned / collegeId filter
 
       const [rows, total] = await Promise.all([
         prisma.course.findMany({
-          where, select: baseSelect, orderBy: { createdAt: "desc" }, skip: (p - 1) * ps, take: ps,
+          where,
+          // omit `select` to return all fields
+          orderBy: { createdAt: "desc" },
+          skip: (p - 1) * ps,
+          take: ps,
+          // if you also want related data visible to superadmin, you can add includes, e.g.:
+          // include: { CoursesAssigned: true, enrollments: true, creator: true }
         }),
         prisma.course.count({ where }),
       ]);
 
-      return res.json({
-        page: p, pageSize: ps, total, data: rows.map(toCoursePayload),
-      });
+      return res.json({ page: p, pageSize: ps, total, data: rows });
     }
 
-    // ---------- NON-SUPERADMIN: require a college context ----------
-    // Resolve college for ADMIN/INSTRUCTOR/STUDENT: prefer query, else user.collegeId
     const resolvedCollegeId = String(collegeId || req.user.collegeId || "");
     if (!resolvedCollegeId) {
-      return res.status(400).json({ error: "collegeId is required for this role" });
+      return res
+        .status(400)
+        .json({ error: "collegeId is required for this role" });
     }
 
     if (role === "STUDENT") {
       const sid = String(req.user.id);
-
+      console.log(view);
       if (view === "catalog") {
         const where = {
           ...commonFilter,
@@ -415,31 +539,60 @@ router.get("/courses", async (req, res) => {
         };
         const [rows, total] = await Promise.all([
           prisma.course.findMany({
-            where, select: baseSelect, orderBy: { createdAt: "desc" }, skip: (p - 1) * ps, take: ps,
+            where,
+            select: baseSelect,
+            orderBy: { createdAt: "desc" },
+            skip: (p - 1) * ps,
+            take: ps,
           }),
           prisma.course.count({ where }),
         ]);
-        return res.json({ page: p, pageSize: ps, total, data: rows.map(toCoursePayload) });
+        return res.json({
+          page: p,
+          pageSize: ps,
+          total,
+          data: rows.map(toCoursePayload),
+        });
       }
 
-      // default: enrolled
+      // ✅ Show only if the student is enrolled AND enrollment is approved
       const whereEnroll = {
         studentId: sid,
+        status: "APPROVED", // <-- critical gate
         AND: [
           { course: commonFilter },
-          { course: { CoursesAssigned: { some: { collegeId: resolvedCollegeId } } } },
+          {
+            course: {
+              CoursesAssigned: { some: { collegeId: resolvedCollegeId } },
+            },
+          },
         ],
       };
+
       const [enrolls, total] = await Promise.all([
         prisma.enrollment.findMany({
           where: whereEnroll,
-          select: { course: { select: baseSelect } },
-          orderBy: { createdAt: "desc" }, skip: (p - 1) * ps, take: ps,
+          // select: { course: { select: baseSelect } },
+          include: {
+            // ✅ pulls full enrollment row + nested course
+            course: { select: baseSelect },
+          },
+
+          orderBy: { createdAt: "desc" },
+          skip: (p - 1) * ps,
+          take: ps,
         }),
         prisma.enrollment.count({ where: whereEnroll }),
       ]);
+
+      console.log("Roleee", enrolls);
       return res.json({
-        page: p, pageSize: ps, total, data: enrolls.map((e) => toCoursePayload(e.course)),
+        page: p,
+        pageSize: ps,
+        total,
+        data: enrolls,
+        enrolls,
+        test: 2,
       });
     }
 
@@ -452,17 +605,23 @@ router.get("/courses", async (req, res) => {
       prisma.course.findMany({
         where: whereAssignedToCollege,
         select: baseSelect,
-        orderBy: { createdAt: "desc" }, skip: (p - 1) * ps, take: ps,
+        orderBy: { createdAt: "desc" },
+        skip: (p - 1) * ps,
+        take: ps,
       }),
       prisma.course.count({ where: whereAssignedToCollege }),
     ]);
-    return res.json({ page: p, pageSize: ps, total, data: rows.map(toCoursePayload) });
+    return res.json({
+      page: p,
+      pageSize: ps,
+      total,
+      data: rows.map(toCoursePayload),
+    });
   } catch (err) {
     console.error("GET /courses error:", err);
     return res.status(500).json({ error: "Internal server error" });
   }
 });
-
 
 router.post("/courses", requireSuperAdmin, async (req, res) => {
   const { title, thumbnail, creatorId, status, category, description } =
@@ -558,53 +717,86 @@ router.delete("/courses/:id", requireSuperAdmin, async (req, res) => {
 // });
 
 // superadmin.js (same router)
-router.get("/courses/:id", async (req, res) => {
-  try {
-    if (!req.user) return res.status(401).json({ error: "Unauthorized" });
+// router.get("/courses/:id", async (req, res) => {
+//   try {
+//     if (!req.user) return res.status(401).json({ error: "Unauthorized" });
 
-    const role = String(req.user.role || "").toUpperCase();
-    const id = String(req.params.id);
-    const collegeId = String(req.query.collegeId || req.user.collegeId || "");
-    const baseSelect = {
-      id: true, title: true, thumbnail: true, status: true,
-      creatorId: true, category: true, description: true,
-      createdAt: true, updatedAt: true,
-    };
+//     const role = String(req.user.role || "").toUpperCase();
+//     const id = String(req.params.id);
+//     const collegeId = String(req.query.collegeId || req.user.collegeId || "");
+//     const baseSelect = {
+//       id: true,
+//       title: true,
+//       thumbnail: true,
+//       status: true,
+//       creatorId: true,
+//       category: true,
+//       description: true,
+//       createdAt: true,
+//       updatedAt: true,
+//     };
 
-    if (role === "SUPERADMIN") {
-      const course = await prisma.course.findUnique({ where: { id }, select: baseSelect });
-      if (!course) return res.status(404).json({ error: "Not found" });
-      return res.json(course);
-    }
+//     if (role === "SUPERADMIN") {
+//       const course = await prisma.course.findUnique({
+//         where: { id },
+//         select: baseSelect,
+//       });
+//       if (!course) return res.status(404).json({ error: "Not found" });
+//       return res.json(course);
+//     }
 
-    if (!collegeId) return res.status(400).json({ error: "collegeId is required for this role" });
+//     if (!collegeId)
+//       return res
+//         .status(400)
+//         .json({ error: "collegeId is required for this role" });
 
-    if (role === "STUDENT") {
-      const sid = String(req.user.id);
-      const enroll = await prisma.enrollment.findFirst({
-        where: {
-          studentId: sid,
-          courseId: id,
-          course: { CoursesAssigned: { some: { collegeId } } },
-        },
-        select: { course: { select: baseSelect } },
-      });
-      if (!enroll) return res.status(404).json({ error: "Not found" });
-      return res.json(enroll.course);
-    }
+//     if (role === "STUDENT") {
+//       const sid = String(req.user.id);  
+//       const requireAssignment = !!collegeId;
 
-    // ADMIN / INSTRUCTOR
-    const course = await prisma.course.findFirst({
-      where: { id, CoursesAssigned: { some: { collegeId } } },
-      select: baseSelect,
-    });
-    if (!course) return res.status(404).json({ error: "Not found" });
-    return res.json(course);
-  } catch (err) {
-    console.error("GET /courses/:id error:", err);
-    return res.status(500).json({ error: "Internal server error" });
-  }
-});
+//       const course = await prisma.course.findFirst({
+//         where: {
+//           id,
+//           AND: [
+//             {
+//               enrollments: {
+//                 some: { studentId: sid /*, status: "APPROVED" */ },
+//               },
+//             },
+//             ...(requireAssignment
+//               ? [{ CoursesAssigned: { some: { collegeId } } }]
+//               : []),
+//           ],
+//         },
+//         select: baseSelect,
+//       });
+
+//       if (!course) return res.status(404).json({ error: "Not found" });
+//       return res.json(course);
+//     }
+
+//     // ADMIN / INSTRUCTOR
+//     const course = await prisma.course.findFirst({
+//       where: { id, CoursesAssigned: { some: { collegeId } } },
+//       select: baseSelect,
+//     });
+//     if (!course) return res.status(404).json({ error: "Not found" });
+//     return res.json(course);
+//   } catch (err) {
+//     console.error("GET /courses/:id error:", err);
+//     return res.status(500).json({ error: "Internal server error" });
+//   }
+// });
+// router.get(
+//   "/courses/:id",
+//   requireAnyRole("SUPERADMIN"), 
+//   courseDetailHandler
+// );
+
+
+router.get("/courses/:id", courseDetailHandler);
+
+
 
 router.post("/courses/:id/assign", async (req, res) => {
   try {

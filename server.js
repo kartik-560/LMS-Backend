@@ -8,7 +8,7 @@ import { fileURLToPath } from "url";
 import serverless from "serverless-http";
 import "dotenv/config.js";
 import { testConnection } from "./config/prisma.js";
-import { protect } from "./middleware/auth.js";
+import { protect,requireAdminOnly } from "./middleware/auth.js";
 import uploadsRouter from "./routes/upload.js";
 import authRouter from "./routes/auth.js";
 import signupRoutes from "./routes/signup.js";
@@ -18,7 +18,7 @@ import enrollmentsRouter from "./routes/enrollments.js";
 import assessmentsRouter from "./routes/assessments.js";
 import progressRoutes from "./routes/progress.js";
 import collegesRouter from "./routes/college.js";
-
+import adminRouter from "./routes/admin.js";
 if (!process.env.DATABASE_URL) {
   console.error(
     "❌ DATABASE_URL is not set in your environment. Please check your .env file."
@@ -52,6 +52,7 @@ app.use(
     optionsSuccessStatus: 204,
   })
 );
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -85,6 +86,8 @@ app.get("/health", (_req, res) => {
 app.use("/api/auth", authRouter);
 
 app.use("/api/colleges", collegesRouter);
+app.use("/api/admin", protect, requireAdminOnly, adminRouter);
+app.use("/api",protect, superAdminRouter);
 app.use("/api/superadmin", protect, superAdminRouter);
 app.use("/api/uploads", express.static(path.resolve("uploads")));
 app.use("/api/uploads", uploadsRouter);

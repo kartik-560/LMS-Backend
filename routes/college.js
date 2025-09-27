@@ -1,7 +1,7 @@
 import express from "express";
 import { body, validationResult } from "express-validator";
 import { prisma } from "../config/prisma.js";
-import { protect } from "../middleware/auth.js";
+import { protect} from "../middleware/auth.js";
 
 const router = express.Router();
 
@@ -31,7 +31,8 @@ const asIntOrNull = (v) => {
   return Number.isFinite(n) ? n : null;
 };
 
-/** Create College (SUPERADMIN) */
+const ensureSuperAdmin = [protect, authorize("SUPERADMIN")];
+
 router.post(
   "/",
   [
@@ -277,26 +278,331 @@ console.log(JSON.stringify(sample, null, 2));
 });
 
 
+// router.get( "/:id",[protect, authorize("SUPERADMIN")],
+//   async (req, res, next) => {
+//     try {
+//       const id = String(req.params.id);
+
+//       // 1) College + users (we'll split by role) + direct courses
+//       const college = await prisma.college.findUnique({
+//         where: { id },
+//         include: {
+//           departments: true,
+//           users: {
+//             select: {
+//               id: true,
+//               fullName: true,
+//               email: true,
+//               mobile: true,
+//               role: true,
+//             },
+//             orderBy: { fullName: "asc" },
+//           },
+//           courses: {
+//             select: {
+//               id: true,
+//               title: true,
+//               thumbnail: true,
+//               status: true,
+//               createdAt: true,
+//               updatedAt: true,
+//               _count: { select: { enrollments: true } },
+//             },
+//             orderBy: { title: "asc" },
+//           },
+//           _count: {
+//             select: {
+//               users: true,
+//               CoursesAssigned: true,
+//               courses: true,
+//             },
+//           },
+//         },
+//       });
+
+//       if (!college) {
+//         return res
+//           .status(404)
+//           .json({ success: false, message: "College not found" });
+//       }
+
+//       // 2) Split users by role (support both lower/upper case)
+//       const isInstr = (r) => r === "INSTRUCTOR" || r === "instructor";
+//       const isStud  = (r) => r === "STUDENT" || r === "student";
+
+//       const instructors = college.users.filter((u) => isInstr(u.role));
+//       const students    = college.users.filter((u) => isStud(u.role));
+
+//       // 3) Courses via CoursesAssigned → course
+//       const assigned = await prisma.coursesAssigned.findMany({
+//         where: { collegeId: id },
+//         include: {
+//           course: {
+//             select: {
+//               id: true,
+//               title: true,
+//               thumbnail: true,
+//               status: true,
+//               createdAt: true,
+//               updatedAt: true,
+//               _count: { select: { enrollments: true } },
+//             },
+//           },
+//         },
+//         orderBy: { createdAt: "desc" },
+//       });
+
+//       const assignedCourses = assigned
+//         .map((a) => a.course)
+//         .filter(Boolean);
+
+//       // 4) Merge direct + assigned courses (dedupe by id)
+//       const courseMap = new Map();
+//       [...college.courses, ...assignedCourses].forEach((c) => {
+//         if (c && !courseMap.has(c.id)) courseMap.set(c.id, c);
+//       });
+//       const courses = Array.from(courseMap.values());
+
+//       // 5) Enrollment totals via groupBy (optional, for Students Enrolled)
+//       const courseIds = courses.map((c) => c.id);
+//       let enrolledByCourse = {};
+//       let totalEnrolled = 0;
+
+//       if (courseIds.length) {
+//         const grouped = await prisma.enrollment.groupBy({
+//           by: ["courseId"],
+//           where: { courseId: { in: courseIds } },
+//           _count: { _all: true },
+//         });
+//         grouped.forEach((g) => {
+//           enrolledByCourse[g.courseId] = g._count._all;
+//           totalEnrolled += g._count._all;
+//         });
+//       }
+
+//       const mapUser = (u) => ({
+//         id: u.id,
+//         name: u.fullName,
+//         email: u.email,
+//         mobile: u.mobile,
+//         role: u.role,
+//       });
+
+//       res.json({
+//         success: true,
+//         data: {
+//           college: {
+//             id: college.id,
+//             name: college.name,
+//             email: college.email,
+//             contactPerson: college.contactPerson,
+//             mobileNumber: college.mobileNumber,
+//             status: college.status,
+//             validity: college.validity,
+//             createdAt: college.createdAt,
+//             updatedAt: college.updatedAt,
+//             departments: college.departments,
+//           },
+//           counts: {
+//             instructors: instructors.length,
+//             studentsAssigned: students.length,
+//             courses: courses.length,
+//             studentsEnrolled: totalEnrolled,
+//           },
+//           lists: {
+//             instructors: instructors.map(mapUser),
+//             students: students.map(mapUser),
+//             courses: courses.map((c) => ({
+//               id: c.id,
+//               title: c.title,
+//               thumbnail: c.thumbnail,
+//               status: c.status,
+//               createdAt: c.createdAt,
+//               updatedAt: c.updatedAt,
+//               enrolledCount:
+//                 typeof c._count?.enrollments === "number"
+//                   ? c._count.enrollments
+//                   : enrolledByCourse[c.id] ?? 0,
+//             })),
+//           },
+//         },
+//       });
+//     } catch (err) {
+//       next(err);
+//     }
+//   }
+// );
+
 router.get("/:id",
   [protect, authorize("SUPERADMIN")],
   async (req, res, next) => {
     try {
+      const id = String(req.params.id);
+
       const college = await prisma.college.findUnique({
-        where: { id: String(req.params.id) },
-        include: { departments: true },
+        where: { id },
+        include: {
+          departments: true,
+          users: {
+            select: { id: true, fullName: true, email: true, mobile: true, role: true },
+            orderBy: { fullName: "asc" },
+          },
+          courses: {
+            select: {
+              id: true, title: true, thumbnail: true, status: true,
+              createdAt: true, updatedAt: true,
+              _count: { select: { enrollments: true } },
+            },
+            orderBy: { title: "asc" },
+          },
+          _count: { select: { users: true, CoursesAssigned: true, courses: true } },
+        },
       });
-      if (!college)
-        return res
-          .status(404)
-          .json({ success: false, message: "College not found" });
-      res.json({ success: true, data: { college } });
+
+      if (!college) return res.status(404).json({ success: false, message: "College not found" });
+
+      const isInstr = (r) => r === "INSTRUCTOR" || r === "instructor";
+      const isStud  = (r) => r === "STUDENT"   || r === "student";
+      const isAdmin = (r) => r === "ADMIN"     || r === "admin";
+
+      const instructors = college.users.filter((u) => isInstr(u.role));
+      const students    = college.users.filter((u) => isStud(u.role));
+      const admins      = college.users.filter((u) => isAdmin(u.role)); 
+
+      const assigned = await prisma.coursesAssigned.findMany({
+        where: { collegeId: id },
+        include: {
+          course: {
+            select: {
+              id: true, title: true, thumbnail: true, status: true,
+              createdAt: true, updatedAt: true,
+              _count: { select: { enrollments: true } },
+            },
+          },
+        },
+        orderBy: { createdAt: "desc" },
+      });
+
+      const assignedCourses = assigned.map((a) => a.course).filter(Boolean);
+
+      const courseMap = new Map();
+      [...college.courses, ...assignedCourses].forEach((c) => c && !courseMap.has(c.id) && courseMap.set(c.id, c));
+      const courses = Array.from(courseMap.values());
+      const courseIds = courses.map((c) => c.id);
+
+   
+      let enrolledByCourse = {};
+      let totalEnrolled = 0;
+      if (courseIds.length) {
+        const grouped = await prisma.enrollment.groupBy({
+          by: ["courseId"],
+          where: { courseId: { in: courseIds } },
+          _count: { _all: true },
+        });
+        grouped.forEach((g) => {
+          enrolledByCourse[g.courseId] = g._count._all;
+          totalEnrolled += g._count._all;
+        });
+      }
+
+      let studentCourseCount = {};
+      if (students.length) {
+        const studentIds = students.map((s) => s.id);
+        const distinctEnroll = await prisma.enrollment.groupBy({
+          by: ["studentId", "courseId"],
+          where: { studentId: { in: studentIds }, ...(courseIds.length ? { courseId: { in: courseIds } } : {}) },
+        });
+        for (const row of distinctEnroll) {
+          studentCourseCount[row.studentId] = (studentCourseCount[row.studentId] || 0) + 1;
+        }
+      }
+
+      let managedCourseCount = {};
+      try {
+        if (instructors.length && courseIds.length) {
+          const instructorIds = instructors.map((i) => i.id);
+          const ciGrouped = await prisma.courseInstructor.groupBy({
+            by: ["instructorId", "courseId"],
+            where: { instructorId: { in: instructorIds }, courseId: { in: courseIds } },
+          });
+          for (const row of ciGrouped) {
+            managedCourseCount[row.instructorId] = (managedCourseCount[row.instructorId] || 0) + 1;
+          }
+        }
+      } catch (e) {
+        console.warn("courseInstructor groupBy failed — check your model name/fields:", e?.message);
+        managedCourseCount = {}; 
+      }
+
+      const mapUser = (u) => ({
+        id: u.id,
+        name: u.fullName,
+        email: u.email,
+        mobile: u.mobile,
+        role: u.role,
+      });
+
+      const mapStudentWithCount = (u) => ({
+        ...mapUser(u),
+        enrolledCoursesCount: studentCourseCount[u.id] || 0,
+      });
+
+      const mapInstructorWithCount = (u) => ({
+        ...mapUser(u),
+        managedCoursesCount: managedCourseCount[u.id] || 0,
+      });
+
+      const mapAdminWithCount = (u) => ({
+        ...mapUser(u),
+      
+      });
+
+      res.json({
+        success: true,
+        data: {
+          college: {
+            id: college.id,
+            name: college.name,
+            email: college.email,
+            contactPerson: college.contactPerson,
+            mobileNumber: college.mobileNumber,
+            status: college.status,
+            validity: college.validity,
+            createdAt: college.createdAt,
+            updatedAt: college.updatedAt,
+            departments: college.departments,
+          },
+          counts: {
+            instructors: instructors.length,
+            studentsAssigned: students.length,
+            courses: courses.length,
+            studentsEnrolled: totalEnrolled,
+          },
+          lists: {
+            instructors: instructors.map(mapInstructorWithCount),
+            students: students.map(mapStudentWithCount),
+            admins: admins.map(mapAdminWithCount),
+            courses: courses.map((c) => ({
+              id: c.id,
+              title: c.title,
+              thumbnail: c.thumbnail,
+              status: c.status,
+              createdAt: c.createdAt,
+              updatedAt: c.updatedAt,
+              enrolledCount:
+                typeof c._count?.enrollments === "number"
+                  ? c._count.enrollments
+                  : enrolledByCourse[c.id] ?? 0,
+            })),
+          },
+        },
+      });
     } catch (err) {
       next(err);
     }
   }
 );
 
-/** Update College */
 router.put(
   "/:id",
   [
@@ -356,7 +662,6 @@ router.put(
   }
 );
 
-/** Delete College (cascade per schema) */
 router.delete(
   "/:id",
   [protect, authorize("SUPERADMIN")],
@@ -374,7 +679,6 @@ router.delete(
   }
 );
 
-/** Create Department under a College */
 router.post(
   "/:collegeId/departments",
   [
@@ -419,7 +723,6 @@ router.post(
   }
 );
 
-/** List Departments for a College */
 router.get(
   "/:collegeId/departments",
   [protect, authorize("SUPERADMIN")],
@@ -445,7 +748,6 @@ router.get(
   }
 );
 
-/** Update Department (ensuring it belongs to the college) */
 router.put(
   "/:collegeId/departments/:departmentId",
   [
@@ -495,7 +797,6 @@ router.put(
   }
 );
 
-/** Delete Department (ensuring it belongs to the college) */
 router.delete(
   "/:collegeId/departments/:departmentId",
   [protect, authorize("SUPERADMIN")],
@@ -525,7 +826,6 @@ router.delete(
   }
 );
 
-/** department getting route fro the admin/college */
 router.get("/departments", protect, async (req, res) => {
   try {
     const setting = await prisma.setting.findUnique({
@@ -544,5 +844,111 @@ router.get("/departments", protect, async (req, res) => {
     res.status(500).json({ error: "Internal error" });
   }
 });
+
+
+router.get("/:collegeId/permissions", ensureSuperAdmin, async (req, res) => {
+  const { collegeId } = req.params;
+
+  const college = await prisma.college.findUnique({
+    where: { id: collegeId },
+    select: {
+      id: true,
+      studentLimit: true,
+      adminLimit: true,
+      instructorLimit: true,
+      permissions: true,
+    },
+  });
+  if (!college) return res.status(404).json({ error: "College not found" });
+
+
+const admins = await prisma.user.findMany({
+  where: { role: "ADMIN", collegeId },
+  select: { id: true, fullName: true, email: true, },
+});
+
+let perms = college.permissions || {};
+if (typeof perms === "string") {
+  try { perms = JSON.parse(perms); } catch {}
+}
+const toggles = perms.adminToggles || {};
+
+const adminPermissions = admins.map((a) => ({
+  id: a.id,
+  name: a.fullName,           
+  email: a.email,
+  
+  permissions: {
+    canCreateCourses: !!toggles[a.id]?.canCreateCourses,
+    canCreateTests:   !!toggles[a.id]?.canCreateTests,
+    canManageTests:   !!toggles[a.id]?.canManageTests,
+  },
+}));
+
+
+  res.json({
+    limits: {
+      studentLimit: college.studentLimit,
+      adminLimit: college.adminLimit,
+      instructorLimit: college.instructorLimit,
+    },
+    adminPermissions,
+  });
+});
+
+
+router.put("/:collegeId/permissions/limits", ensureSuperAdmin, async (req, res) => {
+  const { collegeId } = req.params;
+  const {
+    studentLimit = 0,
+    adminLimit = 0,
+    instructorLimit = 0,
+  } = req.body || {};
+
+  const updated = await prisma.college.update({
+    where: { id: collegeId },
+    data: {
+      studentLimit: Number(studentLimit),
+      adminLimit: Number(adminLimit),
+      instructorLimit: Number(instructorLimit),
+    },
+    select: { studentLimit: true, adminLimit: true, instructorLimit: true },
+  });
+
+  res.json({ limits: updated });
+});
+
+
+router.put("/:collegeId/permissions/admin/:userId", ensureSuperAdmin, async (req, res) => {
+  const { collegeId, userId } = req.params;
+  const { canCreateCourses, canCreateTests, canManageTests } = req.body || {};
+
+  const college = await prisma.college.findUnique({
+    where: { id: collegeId },
+    select: { permissions: true },
+  });
+  if (!college) return res.status(404).json({ error: "College not found" });
+
+const prev = college.permissions || {};
+
+  const adminToggles = prev.adminToggles || {};
+
+  adminToggles[userId] = {
+    canCreateCourses: !!canCreateCourses,
+    canCreateTests: !!canCreateTests,
+    canManageTests: !!canManageTests,
+  };
+
+  const updated = await prisma.college.update({
+    where: { id: collegeId },
+    data: {
+      permissions: { ...prev, adminToggles },
+    },
+    select: { permissions: true },
+  });
+
+  res.json({ ok: true, permissions: updated.permissions });
+});
+
 
 export default router;
