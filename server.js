@@ -30,7 +30,7 @@ const app = express();
 const ALLOWED_ORIGINS = [
   "http://localhost:5173",
   "http://localhost:3000",
-  "https://lms-black-five.vercel.app/"
+  "https://lms-black-five.vercel.app"
 ];
 
 
