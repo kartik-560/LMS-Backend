@@ -278,6 +278,8 @@ console.log(JSON.stringify(sample, null, 2));
 });
 
 
+
+
 // router.get( "/:id",[protect, authorize("SUPERADMIN")],
 //   async (req, res, next) => {
 //     try {
@@ -679,8 +681,7 @@ router.delete(
   }
 );
 
-router.post(
-  "/:collegeId/departments",
+router.post( "/:collegeId/departments",
   [
     protect,
     authorize("SUPERADMIN"),
@@ -723,8 +724,7 @@ router.post(
   }
 );
 
-router.get(
-  "/:collegeId/departments",
+router.get("/:collegeId/departments",
   [protect, authorize("SUPERADMIN")],
   async (req, res, next) => {
     try {

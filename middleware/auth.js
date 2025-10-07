@@ -62,11 +62,9 @@ export async function protect(req, res, next) {
         isEmailVerified: true,
         permissions: true,
         year: true,
-        branch: true,
         mobile: true,
-        mustChangePassword: true,
-        tokenVersion: true,     // already used in your check
-        collegeId: true,        // 👈 fetch it directly
+        tokenVersion: true,     
+        collegeId: true,        
       },
     });
 

@@ -83,6 +83,7 @@ app.get("/health", (_req, res) => {
 
 // Routes
 app.use("/api/auth", authRouter);
+app.use("/api", signupRoutes);
 
 app.use("/api/colleges", collegesRouter);
 app.use("/api/admin", protect, requireAdminOnly, adminRouter);
@@ -94,7 +95,6 @@ app.use("/api", protect, chapterRouter);
 app.use("/api", protect, enrollmentsRouter);
 app.use("/api/assessments", protect, assessmentsRouter);
 app.use("/api/progress", progressRoutes);
-app.use("/api", signupRoutes);
 
 app.get("/diag/env", (_req, res) => {
   res.json({
