@@ -6,26 +6,26 @@ import { prisma } from "../config/prisma.js";
 import bcrypt from "bcryptjs";
 
 const router = express.Router();
-
+const normalizeEmail = (e) =>
+  typeof e === "string" ? e.trim().toLowerCase() : e;
 // Your existing signup complete route
-router.post(
-  "/signup/complete",
+router.post("/signup/complete",
   [
     body("email").exists().isEmail(),
     body("password").exists().isLength({ min: 6 }),
     body("fullName").exists().isLength({ min: 2, max: 100 }),
     body("year").optional().isString().isLength({ max: 10 }),
-    body("branch").optional().isString().isLength({ max: 100 }),
+
     body("mobile").optional().isString().isLength({ max: 20 }),
-    // body("rollNumber").optional().isString().isLength({ max: 100 }), // For students
+    body("rollNumber").optional().isString().isLength({ max: 100 }), 
     handleValidationErrors,
   ],
   async (req, res) => {
     try {
-      const normEmail = req.body.email.toLowerCase();
-      const { password, fullName, year, branch, mobile, rollNumber } = req.body;
+      const normEmail = normalizeEmail(req.body.email);
+      const { password, fullName, year, mobile, rollNumber } = req.body;
 
-      // Ensure there is a verified registration session still valid
+      
       const reg = await prisma.registration.findUnique({
         where: { email: normEmail },
       });
@@ -39,31 +39,33 @@ router.post(
           .status(400)
           .json({ success: false, message: "Please verify OTP first" });
       }
-      //   if (!reg.otpExpires || reg.otpExpires < new Date()) {
-      //     return res.status(400).json({
-      //       success: false,
-      //       message: "Signup session expired. Please verify OTP again.",
-      //     });
-      //   }
+      if (!reg.otpExpires || reg.otpExpires < new Date()) {
+        return res.status(400).json({
+          success: false,
+          message: "Signup session expired. Please verify OTP again.",
+        });
+      }
 
-      // Prevent duplicates
+      // 2) Prevent duplicates
       const exists = await prisma.user.findUnique({
         where: { email: normEmail },
       });
       if (exists) {
-        return res.status(409).json({
-          success: false,
-          message: "User already exists with this email",
-        });
+        return res
+          .status(409)
+          .json({
+            success: false,
+            message: "User already exists with this email",
+          });
       }
 
-      // Hash password
-      const hash = await bcrypt.hash(password, 10);
+      // 3) Hash password
+      const hash = await bcrypt.hash(String(password), 10);
 
-      // Role is determined by registration data
-      const role = reg.role.toLowerCase();
+      // 4) Role is determined by registration data
+      const role = String(reg.role || "student").toLowerCase();
 
-      // Build user data
+      // 5) Build user data
       const userData = {
         email: normEmail,
         password: hash,
@@ -72,16 +74,14 @@ router.post(
         tokenVersion: 0,
         isEmailVerified: true,
         isActive: true,
-        fullName: fullName.trim(),
-        year: year || null,
-        branch: branch || null,
-        mobile: mobile || null,
-        // rollNumber: rollNumber || null,
-        mustChangePassword: false,
+        fullName: String(fullName).trim(),
+        year: year ?? null,
+        mobile: mobile ?? null,
+        rollNumber: rollNumber ?? null,
         permissions: {},
       };
 
-      // Create user and mark registration completed (transactional)
+      // 6) Create user + mark registration completed (transactional)
       const result = await prisma.$transaction(async (tx) => {
         const createdUser = await tx.user.create({
           data: userData,
