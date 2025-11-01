@@ -7,97 +7,8 @@ import xlsx from "xlsx";
 import { protect } from "../middleware/auth.js";
 import { prisma } from "../config/prisma.js";
 import { sendEmail } from "../utils/sendEmail.js";
-import { Strategy as GoogleStrategy } from "passport-google-oauth20";
-import passport from "passport";
-import expressSession from "express-session";
-
+import { OAuth2Client } from "google-auth-library";
 const router = express.Router();
-
-passport.serializeUser((user, done) => {
-  done(null, user.id); // You can store the user ID in the session
-});
-
-// Deserialize the user from the session
-passport.deserializeUser(async (id, done) => {
-  try {
-    const user = await prisma.user.findUnique({ where: { id } });
-    done(null, user); // Attach the user object to the request
-  } catch (error) {
-    done(error, null);
-  }
-});
-router.use(
-  expressSession({
-    secret: process.env.SESSION_SECRET || "your-secret-key",
-    resave: false,
-    saveUninitialized: false,
-    cookie: { secure: process.env.NODE_ENV === "production" },
-  })
-);
-
-// Initialize Passport and session
-router.use(passport.initialize());
-router.use(passport.session());
-
-// Google OAuth Strategy Setup
-passport.use(
-  new GoogleStrategy(
-    {
-      clientID: process.env.GOOGLE_CLIENT_ID,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-      callbackURL: `${process.env.APP_BASE_URL}/api/auth/google/callback`,
-    },
-    async (accessToken, refreshToken, profile, done) => {
-      try {
-        let user = await prisma.user.findUnique({
-          where: { email: profile.emails[0].value },
-        });
-
-        if (!user) {
-          user = await prisma.user.create({
-            data: {
-              fullName: profile.displayName,
-              email: profile.emails[0].value,
-              role: "STUDENT", // Default role for Google login
-              authProvider: "google",
-            },
-          });
-        }
-
-        return done(null, user); // The user object is passed to the session
-      } catch (error) {
-        return done(error, null);
-      }
-    }
-  )
-);
-
-// Google OAuth login route
-router.get(
-  "/google",
-  passport.authenticate("google", {
-    scope: ["profile", "email"],
-  })
-);
-
-// Google OAuth callback route
-router.get(
-  "/google/callback",
-  passport.authenticate("google", { failureRedirect: "/login" }),
-  (req, res) => {
-    const token = jwt.sign(
-      {
-        sub: req.user.id,
-        role: req.user.role,
-        tokenVersion: req.user.tokenVersion,
-      },
-      process.env.JWT_SECRET || "dev-secret",
-      { expiresIn: "7d" }
-    );
-
-    res.redirect(`/dashboard?token=${token}`);
-  }
-);
 
 const normalizeEmail = (e) =>
   typeof e === "string" ? e.trim().toLowerCase() : e;
@@ -161,7 +72,7 @@ const upload = multer({
 const genOtp = () => String(Math.floor(100000 + Math.random() * 900000));
 const hashOtp = async (otp) => bcrypt.hash(otp, 8);
 
-const appBase = process.env.APP_BASE_URL || "http://localhost:5173";
+const appBase = process.env.APP_BASE_URL || "http://localhost:3000";
 
 const loadDepartmentCatalog = async () => {
   const rec = await prisma.setting.findUnique({
@@ -185,14 +96,341 @@ const loadDepartmentCatalog = async () => {
   });
 };
 
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+
+router.post("/google-login", async (req, res) => {
+  try {
+    const { credential } = req.body;
+
+    if (!credential) {
+      return res.status(400).json({
+        success: false,
+        message: "Credential is required",
+      });
+    }
+
+    let payload;
+    try {
+      const ticket = await googleClient.verifyIdToken({
+        idToken: credential,
+        audience: process.env.GOOGLE_CLIENT_ID,
+      });
+      payload = ticket.getPayload();
+    } catch (verifyError) {
+      console.error("Google token verification failed:", verifyError.message);
+      return res.status(401).json({
+        success: false,
+        message: "Invalid Google token",
+      });
+    }
+
+    const { email } = payload;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: "Email not provided by Google",
+      });
+    }
+
+    console.log(`[Google Login] Email: ${email}`);
+
+    // ✅ Check registration status first
+    const registration = await prisma.registration.findUnique({
+      where: { email },
+    });
+
+    if (!registration) {
+      console.warn(`[Google Login] Registration NOT found: ${email}`);
+      return res.status(404).json({
+        success: false,
+        message: "Email not registered. Please sign up first.",
+      });
+    }
+
+    if (registration.status !== "COMPLETED") {
+      console.warn(`[Google Login] Registration not completed: ${email}`);
+      return res.status(403).json({
+        success: false,
+        message: "Please sign up first before logging in.",
+      });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { email },
+    });
+
+    if (!user) {
+      console.warn(`[Google Login] User NOT found in user table: ${email}`);
+      return res.status(404).json({
+        success: false,
+        message: "User account not found. Please sign up again.",
+      });
+    }
+
+    // ✅ Check if verified
+    if (!user.isEmailVerified) {
+      return res.status(403).json({
+        success: false,
+        message: "Please complete sign up first.",
+      });
+    }
+
+    // ✅ Check if user is active
+    if (!user.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: "User account is inactive",
+      });
+    }
+
+    // ✅ Verify role is set
+    if (!user.role) {
+      return res.status(500).json({
+        success: false,
+        message: "User role is not set",
+      });
+    }
+
+    console.log(`[Google Login] User logged in: ${user.id}`);
+
+    // ✅ Update lastLogin
+    await prisma.user.update({
+      where: { email },
+      data: {
+        lastLogin: new Date(),
+      },
+    });
+
+   
+
+    const token = signToken(user);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        user: {
+          id: user.id,
+          email: user.email,
+          fullName: user.fullName,
+          role: user.role,
+          collegeId: user.collegeId,
+          departmentId: user.departmentId,
+        },
+        token,
+      },
+    });
+  } catch (error) {
+    console.error("Google login error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Login failed",
+    });
+  }
+});
+
+router.post("/signup-google", async (req, res) => {
+  try {
+    const { credential } = req.body;
+
+    if (!credential) {
+      return res.status(400).json({
+        success: false,
+        message: "Credential is required",
+      });
+    }
+
+    let payload;
+    try {
+      const ticket = await googleClient.verifyIdToken({
+        idToken: credential,
+        audience: process.env.GOOGLE_CLIENT_ID,
+      });
+      payload = ticket.getPayload();
+    } catch (verifyError) {
+      console.error("Google token verification failed:", verifyError.message);
+      return res.status(401).json({
+        success: false,
+        message: "Invalid Google token",
+      });
+    }
+
+    const { email, name } = payload;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: "Email not provided by Google",
+      });
+    }
+
+    console.log(`[Signup Google] Email: ${email}`);
+
+    // ✅ Find registration by email
+    let registration = await prisma.registration.findUnique({
+      where: { email },
+    });
+
+    if (!registration) {
+      console.warn(`[Signup Google] Registration NOT found: ${email}`);
+      return res.status(404).json({
+        success: false,
+        message: "Email not registered. Please contact your administrator.",
+      });
+    }
+
+    // ✅ Check if already completed
+    if (registration.status === "COMPLETED") {
+      console.warn(`[Signup Google] Already completed: ${email}`);
+      return res.status(409).json({
+        success: false,
+        message: "User already signed up. Please login instead.",
+      });
+    }
+
+    // ✅ Check status is PENDING
+    if (registration.status !== "PENDING") {
+      return res.status(403).json({
+        success: false,
+        message: "Invalid registration status. Please contact administrator.",
+      });
+    }
+
+    console.log(`[Signup Google] Completing signup for: ${email}`);
+
+    // ✅ Update registration - mark as COMPLETED
+    registration = await prisma.registration.update({
+      where: { email },
+      data: {
+        status: "COMPLETED", // ✅ Changed from PENDING to COMPLETED
+        fullName: registration.fullName || name || "User",
+        updatedAt: new Date(),
+      },
+    });
+
+    console.log(`[Signup Google] Registration updated: ${registration.id}`);
+
+    // ✅ NOW CREATE USER RECORD - This is the key part
+    let user = await prisma.user.findUnique({
+      where: { email },
+    });
+
+    if (!user) {
+      // ✅ Create user record for authentication
+      user = await prisma.user.create({
+        data: {
+          email,
+          fullName: registration.fullName || name || "User",
+          role: registration.role || "STUDENT",
+          isEmailVerified: true, // ✅ Mark as verified
+          isActive: true,
+          authProvider: "google",
+          collegeId: registration.collegeId,
+          departmentId: registration.departmentId,
+        },
+      });
+      console.log(`[Signup Google] User created in user table: ${user.id}`);
+    } else {
+      // ✅ If user exists, just update it
+      user = await prisma.user.update({
+        where: { email },
+        data: {
+          isEmailVerified: true,
+          authProvider: "google",
+          fullName: registration.fullName || name,
+        },
+      });
+      console.log(`[Signup Google] User updated in user table: ${user.id}`);
+    }
+
+    // ✅ Verify role is set
+    if (!user.role) {
+      return res.status(500).json({
+        success: false,
+        message: "User role is not set",
+      });
+    }
+
+    // Generate JWT
+    const token = jwt.sign(
+      {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Sign up successful!",
+      data: {
+        user: {
+          id: user.id,
+          email: user.email,
+          fullName: user.fullName,
+          role: user.role,
+          collegeId: user.collegeId,
+          departmentId: user.departmentId,
+        },
+        token,
+      },
+    });
+  } catch (error) {
+    console.error("Signup Google error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Sign up failed",
+    });
+  }
+});
+
+router.post("/departments", async (req, res) => {
+  // 1. Use a try...catch block to handle potential database errors
+  try {
+    const { name, collegeId } = req.body;
+
+    // Basic validation remains the same
+    if (!name || !collegeId) {
+      return res.status(400).json({
+        success: false,
+        message: "Both department name and collegeId are required.",
+      });
+    }
+
+    // 2. Use Prisma to create the new department in the database
+    const newDepartment = await prisma.department.create({
+      data: {
+        name: name,
+        collegeId: collegeId,
+      },
+    });
+
+    // 3. Send the actual new department object from the database as a response
+    res.status(201).json({
+      success: true,
+      message: "Department created successfully.",
+      data: newDepartment,
+    });
+  } catch (error) {
+    // 4. Catch any errors (like an invalid collegeId) and send an error response
+    console.error("Error creating department:", error);
+    res.status(500).json({
+      success: false,
+      message:
+        "Failed to create department. The collegeId might be invalid or not exist.",
+    });
+  }
+});
+
 router.get("/signup/departments-catalog", async (_req, res) => {
   const items = await loadDepartmentCatalog();
   return res.json({ success: true, data: { items } });
 });
 
-// Example: GET /api/colleges/:collegeId/departments
-
-router.post("/registrations",
+router.post(
+  "/registrations",
   [
     protect,
     authorize("SUPERADMIN"),
@@ -306,7 +544,9 @@ router.post("/registrations",
   }
 );
 
-router.post("/registrations/bulk",
+
+router.post(
+  "/registrations/bulk",
   [protect, authorize("SUPERADMIN"), upload.single("file")],
   async (req, res) => {
     try {
@@ -342,45 +582,86 @@ router.post("/registrations/bulk",
             .trim()
             .toUpperCase() || "STUDENT";
         const year = String(pick(r, ["year"])).trim();
-
-        const collegeId = String(pick(r, ["collegeId", "college id"])).trim();
-        const departmentId = String(
-          pick(r, ["departmentId", "department id"])
-        ).trim();
         const academicYear = String(
           pick(r, ["academicYear", "academic year"])
         ).trim();
         const rollNumber = String(
           pick(r, ["rollNumber", "roll number"])
         ).trim();
+        const mobile = String(pick(r, ["mobile", "phone number"])).trim();
 
-        const missing =
-          !fullName ||
-          !email ||
-          !year ||
-          !collegeId ||
-          !academicYear ||
-          !["STUDENT", "INSTRUCTOR", "ADMIN"].includes(roleUpper) ||
-          (roleUpper === "STUDENT" && !departmentId);
+        // Accept collegeName and departmentName instead of IDs
+        const collegeName = String(
+          pick(r, ["collegeName", "college name"])
+        ).trim();
+        const departmentName = String(
+          pick(r, ["departmentName", "department name"])
+        ).trim();
 
-        if (missing) {
+        // Lookup collegeId and departmentId
+        let collegeId = "";
+        let departmentId = "";
+
+        if (collegeName) {
+          const collegeObj = await prisma.college.findFirst({
+            where: { name: { equals: collegeName, mode: "insensitive" } },
+            select: { id: true },
+          });
+          if (collegeObj) collegeId = collegeObj.id;
+        }
+
+        if (departmentName && collegeId) {
+          const deptObj = await prisma.department.findFirst({
+            where: {
+              name: { equals: departmentName, mode: "insensitive" },
+              collegeId,
+            },
+            select: { id: true },
+          });
+          if (deptObj) departmentId = deptObj.id;
+        }
+
+        // Build detailed missing fields array for better error messages
+        const missingFields = [];
+
+        // Common required fields for all roles
+        if (!fullName) missingFields.push("fullName");
+        if (!email) missingFields.push("email");
+        if (!["STUDENT", "INSTRUCTOR", "ADMIN"].includes(roleUpper)) {
+          missingFields.push("role (must be STUDENT, INSTRUCTOR, or ADMIN)");
+        }
+        if (!collegeId) missingFields.push("collegeName not found in database");
+
+        // Role-specific required fields
+        if (roleUpper === "STUDENT") {
+          if (!departmentId)
+            missingFields.push("departmentName not found in database");
+          if (!year) missingFields.push("year");
+          if (!academicYear) missingFields.push("academicYear");
+        } else if (roleUpper === "INSTRUCTOR") {
+          if (!departmentId)
+            missingFields.push("departmentName not found in database");
+        }
+        // ADMIN only needs common fields (no department required)
+
+        if (missingFields.length > 0) {
           results.push({
             email: email || "(missing)",
             status: "SKIPPED",
-            reason: "Missing/invalid fields",
+            reason: `Missing: ${missingFields.join(", ")}`,
           });
           continue;
         }
 
         try {
-          if (roleUpper === "STUDENT") {
+          // Additional validation for STUDENT role
+          if (roleUpper === "STUDENT" || roleUpper === "INSTRUCTOR") {
             const dept = await prisma.department.findUnique({
               where: { id: departmentId },
             });
-            if (!dept || dept.collegeId !== collegeId)
-              throw new Error(
-                "departmentId must belong to the selected college"
-              );
+            if (!dept || dept.collegeId !== collegeId) {
+              throw new Error("Department must belong to the selected college");
+            }
           }
 
           await prisma.registration.create({
@@ -388,11 +669,15 @@ router.post("/registrations/bulk",
               fullName,
               email,
               role: roleUpper,
-              year,
+              year: roleUpper === "STUDENT" ? year : null,
               collegeId,
-              departmentId: roleUpper === "STUDENT" ? departmentId : null,
-              academicYear,
-              rollNumber: rollNumber || null,
+              departmentId:
+                roleUpper === "STUDENT" || roleUpper === "INSTRUCTOR"
+                  ? departmentId
+                  : null,
+              academicYear: roleUpper === "STUDENT" ? academicYear : null,
+              rollNumber: roleUpper === "STUDENT" ? rollNumber || null : null,
+              mobile: mobile || null,
               status: "PENDING",
             },
           });
@@ -403,7 +688,7 @@ router.post("/registrations/bulk",
               subject: "Welcome! Complete your account",
               text: `Hi ${fullName}, you've been registered as ${roleUpper}. Request an OTP at ${appBase}/signup to complete your account.`,
               html: `<p>Hi ${fullName},</p>
-                     <p>You’ve been registered as <b>${roleUpper}</b>.</p>
+                     <p>You've been registered as <b>${roleUpper}</b>.</p>
                      <p><a href="${appBase}/signup">Request OTP</a> to complete your account.</p>`,
             });
           } catch (e) {
@@ -446,7 +731,8 @@ router.post("/registrations/bulk",
   }
 );
 
-router.post("/signup/begin",
+router.post(
+  "/signup/begin",
   [body("email").exists().isEmail(), handleValidationErrors],
   async (req, res) => {
     const email = normalizeEmail(req.body.email);
@@ -484,7 +770,8 @@ router.post("/signup/begin",
   }
 );
 
-router.post("/signup/verify",
+router.post(
+  "/signup/verify",
   [
     body("email").exists().isEmail(),
     body("otp").exists().isLength({ min: 6, max: 6 }),
@@ -522,19 +809,17 @@ router.post("/signup/verify",
       });
     }
 
-    // After OTP is verified, allow 'complete' for next 30 minutes
     const completeBy = new Date(Date.now() + 30 * 60 * 1000);
 
     const updated = await prisma.registration.update({
       where: { id: reg.id },
       data: {
         status: "VERIFIED",
-        otpHash: null, // cannot reuse the OTP
-        otpExpires: completeBy, // repurpose as "complete-by" deadline
+        otpHash: null,
+        otpExpires: completeBy,
       },
     });
 
-    // send registration data back with response
     return res.json({
       success: true,
       message: "OTP verified. Please complete signup within 30 minutes.",
@@ -546,8 +831,7 @@ router.post("/signup/verify",
         collegeId: reg.collegeId,
         year: reg.year,
         mobile: reg.mobile,
-        // Pass the department object itself, or just its name
-        department: reg.department, // This will now be an object like { id, name, ... }
+        department: reg.department,
         academicYear: reg.academicYear,
         rollNumber: reg.rollNumber,
         status: reg.status,
@@ -556,120 +840,6 @@ router.post("/signup/verify",
     });
   }
 );
-
-// router.post("/signup/complete",
-//   [
-//     body("email").exists().isEmail(),
-//     body("password").exists().isLength({ min: 6 }),
-//     body("fullName").exists().isLength({ min: 2, max: 100 }),
-//     body("year").optional().isString().isLength({ max: 10 }),
-//     body("department").optional().isString().isLength({ max: 100 }),
-//     body("mobile").optional().isString().isLength({ max: 20 }),
-//     body("rollNumber").optional().isString().isLength({ max: 100 }),
-//     handleValidationErrors,
-//   ],
-//   async (req, res) => {
-//     try {
-//       const normEmail = normalizeEmail(req.body.email);
-//       const { password, fullName, year, department, mobile, rollNumber } = req.body;
-
-//       const reg = await prisma.registration.findUnique({
-//         where: { email: normEmail },
-//       });
-//       if (!reg) {
-//         return res
-//           .status(404)
-//           .json({ success: false, message: "Registration not found" });
-//       }
-//       if (reg.status !== "VERIFIED") {
-//         return res
-//           .status(400)
-//           .json({ success: false, message: "Please verify OTP first" });
-//       }
-//       if (!reg.otpExpires || reg.otpExpires < new Date()) {
-//         return res.status(400).json({
-//           success: false,
-//           message: "Signup session expired. Please verify OTP again.",
-//         });
-//       }
-
-//       // 2) Prevent duplicates
-//       const exists = await prisma.user.findUnique({
-//         where: { email: normEmail },
-//       });
-//       if (exists) {
-//         return res
-//           .status(409)
-//           .json({
-//             success: false,
-//             message: "User already exists with this email",
-//           });
-//       }
-
-//       // 3) Hash password
-//       const hash = await bcrypt.hash(String(password), 10);
-
-//       // 4) Role is determined by registration data
-//       const role = String(reg.role || "student").toLowerCase();
-
-//       // 5) Build user data
-//       const userData = {
-//         email: normEmail,
-//         password: hash,
-//         authProvider: "credentials",
-//         role,
-//         tokenVersion: 0,
-//         isEmailVerified: true,
-//         isActive: true,
-//         fullName: String(fullName).trim(),
-//         year: year ?? null,
-//         department: department ?? null,
-//         mobile: mobile ?? null,
-//         rollNumber: rollNumber ?? null,
-//         mustChangePassword: false,
-//         permissions: {},
-//       };
-
-//       // 6) Create user + mark registration completed (transactional)
-//       const result = await prisma.$transaction(async (tx) => {
-//         const createdUser = await tx.user.create({
-//           data: userData,
-//           select: {
-//             id: true,
-//             email: true,
-//             fullName: true,
-//             role: true,
-//             isActive: true,
-//             permissions: true,
-//             authProvider: true,
-//           },
-//         });
-
-//         await tx.registration.update({
-//           where: { id: reg.id },
-//           data: { status: "COMPLETED" },
-//         });
-
-//         return createdUser;
-//       });
-
-//       return res.status(201).json({
-//         success: true,
-//         message: "Account created. Please log in to receive a token.",
-//         data: { user: result },
-//       });
-//     } catch (err) {
-//       if (err?.code === "P2002") {
-//         return res
-//           .status(400)
-//           .json({ success: false, message: "Email already in use" });
-//       }
-//       return res
-//         .status(500)
-//         .json({ success: false, message: err?.message || "Signup failed" });
-//     }
-//   }
-// );
 
 router.post(
   "/register-user",
